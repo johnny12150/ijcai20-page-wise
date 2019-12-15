@@ -5,22 +5,19 @@ from tqdm import tqdm
 dblp = pd.read_pickle('dblp_2011up_venue_renamed.pkl')
 
 tqdm.pandas()
-pbar = tqdm(total=dblp.shape[0])
 # record userid and paperid
 authors_paper = []
-for i, data in dblp.iterrows():
-    authors = ast.literal_eval(data.authors)  # get authors
-    for j, au in enumerate(authors):
-        # fixme: use df to increase performance
-        # author paper dictionary
-        if not any(d['author_name'] == au['name'] for d in authors_paper):
-            authors_paper.append({'author_name': au['name'], 'author_id': au['id'], 'paper_id': [data.id]})
-        else:
-            for d in authors_paper:
-                if d['author_id'] == au['id']:
-                    d['paper_id'].append(data.id)
+for i, data in tqdm(dblp.iterrows(), total=dblp.shape[0]):
+    authors = ast.literal_eval(data.authors)  # get authors list
+    for d in authors:
+        d['paper_id'] = str(data.id)
+    # fixme: use df to increase performance
+    authors_paper.extend(authors)
 
-pbar.close()
+# conver dict to df
+dblp_author_paper = pd.DataFrame(authors_paper)
+# 統計所有作者的歷史論文
+authors = dblp_author_paper.groupby(['id', 'name'])['paper_id'].agg(','.join).reset_index()
 
 # todo: split to basket set based on author
 
