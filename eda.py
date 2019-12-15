@@ -1,5 +1,6 @@
 import pandas as pd
 import ast
+import matplotlib.pyplot as plt
 
 dblp = pd.read_pickle('dblp_2011up_venue_renamed.pkl')
 # dblp_all = pd.read_pickle("F:/volume/19' summer vacation/0819/concat_df/dblp_papers_4100000.pkl")
@@ -48,3 +49,17 @@ dblp_refill.to_csv('dblp_fill.csv', index=False)
 
 # 不要期刊
 # dblp.loc[dblp['doc_type'] == 'Conference']
+
+# 每個conference各年度的paper數
+year_conference = dblp.groupby(['venue_name', 'year'])['id'].count()
+year_conference_index = list(set(year_conference.index.get_level_values(0).tolist()))
+for j in range(len(year_conference_index)):
+    year_count = year_conference.loc[[year_conference_index[j]]].reset_index()
+    year_range = range(2011, 2011+len(year_count))
+    plt.plot(year_count.year.values, year_count.id.values)
+    plt.title(year_conference_index[j])
+    plt.show()
+    # plt.savefig('./preprocess/plots/year_conference/'+str(j)+'.png')
+    # plt.close()
+    if j ==5:
+        break
