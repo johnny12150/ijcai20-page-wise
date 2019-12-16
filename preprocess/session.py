@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import ast
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -61,21 +62,29 @@ pbar = tqdm(total=authors.shape[0])
 author_sessions = []
 for i, data in authors.iterrows():
     # find each paper's reference, replace paper id with refernce basket
+    # fixme: 應該根據不同篇paper的reference建basket
     paper_basket = dblp.loc[dblp['id'].isin(data.paper_id.split(',')), 'references'].tolist()
     paper_basket_tmp = []
     for l, ba in enumerate(paper_basket):
         try:
-            paper_basket_tmp.extend(ast.literal_eval(ba))
+            # 該作者每篇paper的所有references
+            paper_basket_tmp.append(ast.literal_eval(ba))
         except:
             # avoid empty references
             continue
     author_sessions.append(paper_basket_tmp)
     pbar.update(1)
 pbar.close()
+del pbar
 
+# padding sessions
+padded_sessions = np.zeros([len(author_sessions), len(max(author_sessions, key = lambda x: len(x)))])
+for j, se in enumerate(author_sessions):
+    padded_sessions[j][0:len(se)] = se
+    if j==5:
+        break
 
 # TODO rolling by years and conference
-
 
 # todo: split to basket set based on author
 
