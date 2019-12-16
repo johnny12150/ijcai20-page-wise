@@ -8,6 +8,8 @@ dblp_fill = pd.read_csv('dblp_fill.csv')
 dblp = pd.read_pickle('dblp_2011up_venue_renamed.pkl')
 # change year type from float to str
 dblp['year'] = dblp['year'].astype(str)
+# fill na reference with empty string
+dblp.fillna(value={'references': ''}, inplace=True)
 # all related paper
 dblp_all = dblp.append([dblp_2011, dblp_fill], ignore_index=True)
 dblp_all['year'] = dblp_all['year'].astype(str)
@@ -37,7 +39,7 @@ for j in range(len(year_conference_index)):
     year_range = range(2011, 2011+len(year_count))
     plt.plot(year_count.year.values, year_count.id.values)
     plt.title(year_conference_index[j])
-    plt.savefig('./preprocess/plots/year_conference/'+str(j)+'.png')
+    plt.savefig('./preprocess/plots/year_conference/'+ year_conference_index[j].replace(': ', '') +'.png')
     plt.close()
     if j ==5:
         break
@@ -45,29 +47,31 @@ for j in range(len(year_conference_index)):
 # count total conference with years
 print(len(year_conference.index.get_level_values(0).tolist()))  # around 852
 
-# 統計所有作者的歷史論文
-authors = dblp_author_paper.groupby(['id', 'name'])['paper_id'].agg(','.join).reset_index()
-print(dblp.sort_values(by=['year']).loc[:, ['id', 'year']].head()) # sort dblp by year
+# 統計所有作者的歷史論文, sort in group
+# https://stackoverflow.com/questions/27842613/pandas-groupby-sort-within-groups
+# TODO conference should also consider month
+authors = dblp_author_paper.sort_values(by=['year']).groupby(['id', 'name'])['paper_id'].agg(','.join).reset_index()
+# print(dblp.sort_values(by=['year']).loc[:, ['id', 'year']].head()) # sort dblp by year
 # 移除只有一篇paper的作者
 authors = authors[authors['paper_id'].map(lambda x: len(x.split(','))) > 1].reset_index(drop=True)
 
 
 pbar = tqdm(total=authors.shape[0])
-ordered_paper = []
-# TODO select paper wrote by the author and sort it by it's publication date
+# TODO create session of baskets
+author_sessions = []
 for i, data in authors.iterrows():
-    public_paper = data['paper_id'].split(',')  # get the paper id list
-    # print(','.join(dblp_all[dblp_all['id'].isin(public_paper)].sort_values(by=['year'])['id'].astype(str).tolist()))
-    ordered_paper.append(','.join(dblp_all[dblp_all['id'].isin(public_paper)].sort_values(by=['year'])['id'].astype(str).tolist()))
+    # find each paper's reference, replace paper id with refernce basket
+    paper_basket = dblp.loc[dblp['id'].isin(data.paper_id.split(',')), 'references'].tolist()
+    paper_basket_tmp = []
+    for l, ba in enumerate(paper_basket):
+        try:
+            paper_basket_tmp.extend(ast.literal_eval(ba))
+        except:
+            # avoid empty references
+            continue
+    author_sessions.append(paper_basket_tmp)
     pbar.update(1)
 pbar.close()
-
-    # if len(public_paper) > 1:
-    #     # select paper in dblp to find it's publication date
-    #     authors.loc[i, 'paper_id'] = dblp_all[dblp_all['id'].isin(public_paper)].sort_values(by=['year'])['id'].astype(str).tolist()
-
-# replace the column with new value
-authors.replace(authors.index.tolist(), ordered_paper, inplace=True)
 
 
 # TODO rolling by years and conference
