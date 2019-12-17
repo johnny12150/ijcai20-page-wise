@@ -7,7 +7,10 @@ from tqdm import tqdm
 
 # 先只用top 10 conference
 dblp = pd.read_csv('preprocess/edge/dblp_venue_top10.csv')
-dblp.fillna(value={'references': ''}, inplace=True)
+dblp.fillna(value={'references': '', 'venue_id': 0}, inplace=True)
+print(dblp.isna().sum())
+
+# FIXME 從 0開始 mapping新的venue, paper, author id
 
 tqdm.pandas()
 
@@ -20,9 +23,8 @@ for i, data in tqdm(dblp.iterrows(), total=dblp.shape[0], position=0, leave=True
             # create tuple for citation
             paper_link = (data.id, ref)
             rev_paper_link = (ref, data.id)
-            # avoid any duplicates
-            if paper_link not in resultlist and rev_paper_link not in resultlist:
-                resultlist.append(paper_link)
+            resultlist.append(paper_link)
+
     # link paper to venue
     if data.venue_id:
         # 根據年分來建立venue node
@@ -35,19 +37,23 @@ for i, data in tqdm(dblp.iterrows(), total=dblp.shape[0], position=0, leave=True
         # 主要的venue node (不考慮年分)
         paper_link = (data.id, int(data.venue_id))
         rev_paper_link = (int(data.venue_id), data.id)
-        # avoid any duplicates
-        if paper_link not in resultlist and rev_paper_link not in resultlist:
-            resultlist.append(paper_link)
+        resultlist.append(paper_link)
+
     # link paper to author
     if data.authors:  # avoid empty value
         aus = ast.literal_eval(data.authors)
         for j, au in enumerate(aus):
             paper_link = (data.id, au['id'])
             rev_paper_link = (au['id'], data.id)
-            if paper_link not in resultlist and rev_paper_link not in resultlist:
-                resultlist.append(paper_link)
-    if i ==3:
+            resultlist.append(paper_link)
+
+    # FIXME 超過1萬時還是會有效能問題
+    if i == 30000:
         break
+    
+
+# 使用set來取看會不會比較快
+resultlist = list(set(resultlist))
 
 # the above section may take around 35 mins to run
 
