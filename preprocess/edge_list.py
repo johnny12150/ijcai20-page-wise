@@ -47,19 +47,17 @@ for i, data in tqdm(dblp.iterrows(), total=dblp.shape[0], position=0, leave=True
             rev_paper_link = (au['id'], data.id)
             resultlist.append(paper_link)
 
-    # FIXME 超過1萬時還是會有效能問題
-    if i == 30000:
-        break
-    
 
 # 使用set來取看會不會比較快
-resultlist = list(set(resultlist))
+# resultlist = list(set(resultlist))
+# 考慮node i & node j 的inverse的關係
+result = list(set([tuple(sorted(map(int, t))) for t in resultlist]))
 
 # the above section may take around 35 mins to run
 
 # write tuple to txt
 with open('preprocess/edge/papers_edge_list.txt', 'w') as f:
-    for t in resultlist:
+    for t in result:
         line = ' '.join(str(x) for x in t)
         f.write(line + '\n')
 
