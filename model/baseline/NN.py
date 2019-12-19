@@ -55,6 +55,10 @@ emb_2017 = np.load('preprocess/edge/deep_walk_vec.npy')
 # line embedding
 with open('preprocess/edge/line_1and2.pkl', 'rb') as file:
     line_emb = pickle.load(file)
+# 檢查是否所有dblp的node都在embedding裡面
+print(np.isin(train2017.new_papr_id.values, node_id).sum())
+print(np.isin(train2017.new_papr_id.values, np.fromiter(line_emb.keys(), dtype=int)).sum())
+print(np.isin(pa.new_author_id.value_counts().index.values, node_id).sum())
 
 
 # todo data generator, 或是直接concat起來送進keras
@@ -64,8 +68,9 @@ def embedding_loader(emb_data, file_len, batch_size=32):
         batch_y = []
         batch_paths = np.random.choice(a=file_len, size=batch_size)
         for batch_i in batch_paths:
+            print(batch_i)
             # TODO find node id 在emb_data的index
-
+            # np.where(emb_data == batch_i)
             # 找出該paper的所有資訊
             emb_p = emb_data[str(batch_i)]  # paper emb
             # emb_p = emb_data[batch_i]
@@ -79,14 +84,13 @@ def embedding_loader(emb_data, file_len, batch_size=32):
             batch_y += [emb_p]
         batch_x = np.array(batch_x)
         batch_y = np.array(batch_y)
-        print(batch_x.shape)
         yield batch_x, batch_y
 
 
 batch = 32
 # 先用2018前全部 train推薦系統, 2019的test推薦效果
 # train_history = model.fit_generator(embedding_loader(emb_2017, train2017.new_papr_id.values), epochs=1, steps_per_epoch=train2017.shape[0] / batch, verbose=1)
-train_history = model.fit_generator(embedding_loader(line_emb, train2017.new_papr_id.values), epochs=1, steps_per_epoch=train2017.shape[0] / batch, verbose=1)
+train_history = model.fit_generator(embedding_loader(line_emb, train2017.new_papr_id.values), epochs=1, steps_per_epoch= train2017.shape[0] / batch, verbose=1)
 
 # test_history = model.predict()
 
