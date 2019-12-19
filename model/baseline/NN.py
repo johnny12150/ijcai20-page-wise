@@ -14,17 +14,22 @@ bert_abstract = 768
 # output dim (就是graph embedding後的dim)
 emb_dim = 100
 
+# dblp_top50_conf = pd.read_pickle('preprocess/edge/paper_2011up_venue50.pkl')
 dblp_top50_conf = pd.read_pickle('preprocess/edge/paper_venue.pkl')
+dblp_top50_conf18 = dblp_top50_conf.copy()
 pa = pd.read_pickle('preprocess/edge/p_a_before284_delete_author.pkl')
+pa_extra = pd.read_pickle('preprocess/edge/p_a_delete_author.pkl')
 # ab = pd.read_pickle('preprocess/edge/abstracts.pkl')  # FIXME 編碼不對, 且空值未做處理
 
 # FIXME train的時候只考慮第一作者 ?
 # https://stackoverflow.com/questions/20067636/pandas-dataframe-get-first-row-of-each-group
 dblp_top50_conf['new_first_aId'] = pa.groupby('new_papr_id').first()['new_author_id']  # 取每篇的第一作者
+dblp_top50_conf18['new_first_aId'] = pa_extra.groupby('new_papr_id').first()['new_author_id']
 dblp_top50_conf.dropna(subset=['new_first_aId'], inplace=True)  # 移除沒有作者的paper
+dblp_top50_conf18.dropna(subset=['new_first_aId'], inplace=True)
 # select 2018以前全部當train
 train2017 = dblp_top50_conf.loc[dblp_top50_conf.year < 284, ['new_papr_id', 'new_venue_id', 'new_first_aId']]
-test2018 = dblp_top50_conf.loc[dblp_top50_conf.year >= 284, ['new_papr_id', 'new_venue_id', 'new_first_aId']]
+test2018 = dblp_top50_conf18.loc[dblp_top50_conf18.year >= 284, ['new_papr_id', 'new_venue_id', 'new_first_aId']]
 
 # https://stackoverflow.com/questions/41888085/how-to-implement-word2vec-cbow-in-keras-with-shared-embedding-layer-and-negative
 # 用一個network去逼近embedding
@@ -64,6 +69,8 @@ print(np.isin(dblp_top50_conf.new_venue_id.value_counts().index.values, node_id)
 # FIXME 刪除沒有embedding的node當train
 train2017 = train2017.loc[train2017.new_first_aId.isin(node_id)]
 train2017 = train2017.loc[train2017.new_venue_id.isin(node_id)]
+test2018 = test2018.loc[test2018.new_first_aId.isin(node_id)]
+test2018 = test2018.loc[test2018.new_venue_id.isin(node_id)]
 
 
 # data generator
@@ -100,7 +107,7 @@ batch = 32
 # train_history = model.fit_generator(embedding_loader(emb_2017, train2017.new_papr_id.values), epochs=1, steps_per_epoch=train2017.shape[0] / batch, verbose=1)
 train_history = model.fit_generator(embedding_loader(line_emb, train2017.new_papr_id.values), epochs=10, steps_per_epoch= train2017.shape[0] / batch, verbose=2)
 
-test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values), steps_per_epoch= test2018.shape[0] / batch, verbose=2)
+test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values), steps= test2018.shape[0])  # FIXME predict的方式會不同
 
 # TODO rolling的方式讓NN去學習embedding, for loop分年fit
 # for i in range(8):
