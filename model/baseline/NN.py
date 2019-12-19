@@ -9,26 +9,20 @@ bert_abstract = 768
 # output dim (就是graph embedding後的dim)
 emb_dim = 100
 
-dblp_top50_conf = pd.read_pickle('preprocess/edge/paper_2011up_venue50.pkl')
-remove_author = pd.read_pickle("preprocess/edge/p_a_delete_author.pkl")
-pa = pd.read_pickle('preprocess/edge/paper_author.pkl')
-# 刪掉篇數太少的作者
-keep_author = remove_author.new_author_id.value_counts().index.values
-pa = pa.loc[pa.new_author_id.isin(keep_author), :]
-pv = pd.read_pickle('preprocess/edge/paper_venue.pkl')
+dblp_top50_conf = pd.read_pickle('preprocess/edge/paper_venue.pkl')
+pa = pd.read_pickle('preprocess/edge/p_a_delete_author.pkl')
 # ab = pd.read_pickle('preprocess/edge/abstracts.pkl')  # FIXME 編碼不對, 且空值未做處理
-dblp_top50_conf['new_vId'] = pv['new_venue_id']
+
 # FIXME train的時候只考慮第一作者 ?
 # https://stackoverflow.com/questions/20067636/pandas-dataframe-get-first-row-of-each-group
 dblp_top50_conf['new_first_aId'] = pa.groupby('new_papr_id').first()['new_author_id']  # 取每篇的第一作者
-
-# paperId_compare = dblp_top50_conf.loc[:, ['id', 'new_papr_id']]  # id與new_id的對照表
+dblp_top50_conf.dropna(subset=['new_first_aId'], inplace=True)  # 移除沒有作者的paper
 
 # TODO 輸出成一個刪減後的paper csv
 
 # select 2018以前全部當train
-train2017 = dblp_top50_conf.loc[dblp_top50_conf.year < 2018, ['new_papr_id', 'title', 'new_vId', 'new_first_aId']]
-test2018 = dblp_top50_conf.loc[dblp_top50_conf.year >= 2018, ['new_papr_id', 'title', 'new_vId', 'new_first_aId']]
+train2017 = dblp_top50_conf.loc[dblp_top50_conf.time_step < 2018, ['new_papr_id', 'new_venue_id', 'new_first_aId']]
+test2018 = dblp_top50_conf.loc[dblp_top50_conf.time_step >= 2018, ['new_papr_id', 'new_venue_id', 'new_first_aId']]
 
 # https://stackoverflow.com/questions/41888085/how-to-implement-word2vec-cbow-in-keras-with-shared-embedding-layer-and-negative
 # 用一個network去逼近embedding
@@ -76,7 +70,7 @@ def embedding_loader(emb_data, file_len, batch_size=32):
             emb_p = emb_data[str(batch_i)]  # paper emb
             # emb_p = emb_data[batch_i]
             # 根據新paper id 找出 aId, vId
-            vId, aId = dblp_top50_conf.loc[batch_i, ['new_vId', 'new_first_aId']]
+            vId, aId = dblp_top50_conf.loc[batch_i, ['new_venue_id', 'new_first_aId']]
             # emb = np.hstack(emb_data[[vId, aId], :])  # np style
             emb1 = emb_data[str(vId)]
             emb2 = emb_data[str(int(aId))]
