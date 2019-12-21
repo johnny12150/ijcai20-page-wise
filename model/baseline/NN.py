@@ -31,22 +31,13 @@ train2017 = dblp_top50_conf.loc[dblp_top50_conf.year < 284, ['new_papr_id', 'new
 test2018 = dblp_top50_conf18.loc[dblp_top50_conf18.year >= 284, ['new_papr_id', 'new_venue_id', 'new_first_aId']]
 
 # todo 塞入bert
-bert_vec = pd.read_pickle('preprocess/edge/bert_vec.pkl')
-
-# tensor轉為np
-def tensor2np(x):
-    return x.numpy().reshape(-1)
-
-titles = bert_vec.title.apply(tensor2np)
-abstracts = bert_vec.indexed_abstract.apply(tensor2np)
-# output series
-titles.to_csv('preprocess/edge/titles_bert.csv', index=False)
-abstracts.to_csv('preprocess/edge/abstracts_bert.csv', index=False)
+titles = pd.read_pickle('preprocess/edge/titles_bert.pkl')
+abstracts = pd.read_pickle('preprocess/edge/abstracts_bert.pkl')
 
 # https://stackoverflow.com/questions/41888085/how-to-implement-word2vec-cbow-in-keras-with-shared-embedding-layer-and-negative
 # 用一個network去逼近embedding
-# all_in_one = Input(shape=(emb_dim*2+bert_title+bert_abstract,))
-all_in_one = Input(shape=(emb_dim*2,))
+all_in_one = Input(shape=(emb_dim*2+bert_title+bert_abstract,))
+# all_in_one = Input(shape=(emb_dim*2,))
 
 # out_emb = Dense(emb_dim, activation='sigmoid')(concatenate([paperId_emb, authorId_emb, title_emb, abstract_emb]))
 d1 = Dense(512, activation='linear')(all_in_one)
@@ -61,9 +52,6 @@ model.compile(optimizer='rmsprop', loss='mae')
 
 node_id = np.load('preprocess/edge/node_id.npy').astype(int)
 emb_2017 = np.load('preprocess/edge/deep_walk_vec.npy')
-# sort both np at the same time
-# sorter = node_id.argsort()
-# emb_2017_sorted = emb_2017[sorter]
 
 # line embedding
 with open('preprocess/edge/line_1and2.pkl', 'rb') as file:
@@ -87,6 +75,8 @@ def embedding_loader(emb_data, file_len, stage='train', graph="LINE", batch_size
         batch_y = []
         batch_paths = np.random.choice(a=file_len, size=batch_size)
         for batch_i in batch_paths:
+            emb_t = titles.iloc[batch_i]  # 找該paper的title, abstract
+            emb_a = abstracts.iloc[batch_i]
             if stage == 'train':
                 # 根據新paper id 找出 aId, vId
                 vId, aId = dblp_top50_conf.loc[batch_i, ['new_venue_id', 'new_first_aId']]
@@ -94,14 +84,14 @@ def embedding_loader(emb_data, file_len, stage='train', graph="LINE", batch_size
                 vId, aId = dblp_top50_conf18.loc[batch_i, ['new_venue_id', 'new_first_aId']]
             if graph == 'LINE':
                 # 找出該paper的所有資訊
-                # FIXME testing的embedding還沒有答案
                 emb_p = emb_data[str(batch_i)]  # paper emb
                 emb1 = emb_data[str(vId)]
                 emb2 = emb_data[str(int(aId))]
-                emb = np.concatenate((emb1, emb2), axis=None)
+                emb = np.concatenate((emb1, emb2, emb_t, emb_a), axis=None)
             elif graph == "DeepWalk":
                 emb_p = emb_data[np.where(node_id == batch_i)]  # find node id 在emb_data的index
                 emb = np.hstack(emb_data[[vId, aId], :])  # np style
+                emb = np.concatenate((emb, emb_t, emb_a), axis=None)
             batch_x += [emb]
             batch_y += [emb_p]
         batch_x = np.array(batch_x)
@@ -114,6 +104,7 @@ batch = 32
 # train_history = model.fit_generator(embedding_loader(emb_2017, train2017.new_papr_id.values, 'train', "DeepWalk"), epochs=1, steps_per_epoch=train2017.shape[0] / batch, verbose=1)
 train_history = model.fit_generator(embedding_loader(line_emb, train2017.new_papr_id.values), epochs=10, steps_per_epoch=train2017.shape[0] / batch, verbose=2)
 
+# FIXME testing的embedding還沒有答案
 test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values, 'test'), steps=test2018.shape[0])
 
 # TODO rolling的方式讓NN去學習embedding, for loop分年fit
