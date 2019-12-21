@@ -6,6 +6,8 @@ from keras.layers import Input, Dense, concatenate
 from keras.utils.vis_utils import plot_model
 import graphviz
 import os
+from sklearn.neighbors import KNeighborsClassifier
+import ml_metrics as metrics
 
 os.environ["PATH"] += os.pathsep + 'C:/Users/Wade/Anaconda3/Library/bin/graphviz'
 
@@ -70,6 +72,14 @@ test2018 = test2018.loc[test2018.new_venue_id.isin(node_id)]
 
 # data generator
 def embedding_loader(emb_data, file_len, stage='train', graph="LINE", batch_size=32):
+    """
+    準備資料給模型
+    :param emb_data:
+    :param file_len:
+    :param stage: 'train' or 'test'
+    :param graph: 'LINE' or 'DeepWalk'
+    :param batch_size:
+    """
     while True:
         batch_x = []
         batch_y = []
@@ -89,8 +99,10 @@ def embedding_loader(emb_data, file_len, stage='train', graph="LINE", batch_size
                 emb2 = emb_data[str(int(aId))]
                 emb = np.concatenate((emb1, emb2, emb_t, emb_a), axis=None)
             elif graph == "DeepWalk":
-                emb_p = emb_data[np.where(node_id == batch_i)]  # find node id 在emb_data的index
-                emb = np.hstack(emb_data[[vId, aId], :])  # np style
+                emb_p = emb_data[np.where(node_id == batch_i)[0][0]]  # find node id 在emb_data的index
+                emb_v = np.where(node_id == int(vId))[0][0]
+                emb_A = np.where(node_id == int(aId))[0][0]
+                emb = np.hstack(emb_data[[emb_v, emb_A], :])  # np style
                 emb = np.concatenate((emb, emb_t, emb_a), axis=None)
             batch_x += [emb]
             batch_y += [emb_p]
@@ -101,15 +113,35 @@ def embedding_loader(emb_data, file_len, stage='train', graph="LINE", batch_size
 
 batch = 32
 # 先用2018前全部 train推薦系統, 2019的test推薦效果
-# train_history = model.fit_generator(embedding_loader(emb_2017, train2017.new_papr_id.values, 'train', "DeepWalk"), epochs=1, steps_per_epoch=train2017.shape[0] / batch, verbose=1)
-train_history = model.fit_generator(embedding_loader(line_emb, train2017.new_papr_id.values), epochs=10, steps_per_epoch=train2017.shape[0] / batch, verbose=2)
+train_history = model.fit_generator(embedding_loader(emb_2017, train2017.new_papr_id.values, 'train', 'DeepWalk'), epochs=10, steps_per_epoch=train2017.shape[0] / batch, verbose=2)
+
+# train_history = model.fit_generator(embedding_loader(line_emb, train2017.new_papr_id.values), epochs=10, steps_per_epoch=train2017.shape[0] / batch, verbose=2)
+
+# save model
+model.save('model/hdf5/model_deepwalk.h5')
 
 # FIXME testing的embedding還沒有答案
-test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values, 'test'), steps=test2018.shape[0])
+test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values, 'test'), steps=test2018.shape[0]/ batch, workers=4)
+
+# 產生 X為embedding, y為id的pair
+y = train2017.new_papr_id.values
+X = emb_2017[y]
+
+# todo 一次load全部data做predict
+predictions = model.predict_generator(embedding_loader(emb_2017, train2017.new_papr_id.values, 'train', 'DeepWalk'), steps=test2018.shape[0]/ batch)
+# predictions = model.predict_generator(X, workers=4)
+
+# 找出跟NN predict出最相似的embedding當作要推薦cite的論文
+neigh = KNeighborsClassifier(n_neighbors=3, n_jobs=4)
+neigh.fit(X, y)
+n_predictions = neigh.predict(predictions)  # 每row的預測paper id
+# FIXME 想辦法推出1篇以上
+
+# FIXME 算MAP
+
 
 # TODO rolling的方式讓NN去學習embedding, for loop分年fit
 # for i in range(8):
 #     model.fit()
 
-# 找出跟NN predict出最相似的embedding當作要推薦cite的論文
 
