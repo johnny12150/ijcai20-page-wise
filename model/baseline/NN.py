@@ -19,7 +19,6 @@ dblp_top50_conf = pd.read_pickle('preprocess/edge/paper_venue.pkl')
 dblp_top50_conf18 = dblp_top50_conf.copy()
 pa = pd.read_pickle('preprocess/edge/p_a_before284_delete_author.pkl')
 pa_extra = pd.read_pickle('preprocess/edge/p_a_delete_author.pkl')
-# ab = pd.read_pickle('preprocess/edge/abstracts.pkl')  # FIXME 編碼不對, 且空值未做處理
 
 # FIXME train的時候只考慮第一作者 ?
 # https://stackoverflow.com/questions/20067636/pandas-dataframe-get-first-row-of-each-group
@@ -31,13 +30,21 @@ dblp_top50_conf18.dropna(subset=['new_first_aId'], inplace=True)
 train2017 = dblp_top50_conf.loc[dblp_top50_conf.year < 284, ['new_papr_id', 'new_venue_id', 'new_first_aId']]
 test2018 = dblp_top50_conf18.loc[dblp_top50_conf18.year >= 284, ['new_papr_id', 'new_venue_id', 'new_first_aId']]
 
+# todo 塞入bert
+bert_vec = pd.read_pickle('preprocess/edge/bert_vec.pkl')
+
+# tensor轉為np
+def tensor2np(x):
+    return x.numpy().reshape(-1)
+
+titles = bert_vec.title.apply(tensor2np)
+abstracts = bert_vec.indexed_abstract.apply(tensor2np)
+# output series
+titles.to_csv('preprocess/edge/titles_bert.csv', index=False)
+abstracts.to_csv('preprocess/edge/abstracts_bert.csv', index=False)
+
 # https://stackoverflow.com/questions/41888085/how-to-implement-word2vec-cbow-in-keras-with-shared-embedding-layer-and-negative
 # 用一個network去逼近embedding
-paperId_emb = Input(shape=(emb_dim,))  # graph embedding的結果
-authorId_emb = Input(shape=(emb_dim,))  # graph embedding的結果
-title_emb = Input(shape=(bert_title,))  # BERT的結果
-abstract_emb = Input(shape=(bert_abstract,))  # BERT的結果
-
 # all_in_one = Input(shape=(emb_dim*2+bert_title+bert_abstract,))
 all_in_one = Input(shape=(emb_dim*2,))
 
@@ -66,7 +73,7 @@ print(np.isin(train2017.new_papr_id.values, node_id).sum())
 print(np.isin(train2017.new_papr_id.values, np.fromiter(line_emb.keys(), dtype=int)).sum())
 print(np.isin(pa.new_author_id.value_counts().index.values, node_id).sum())
 print(np.isin(dblp_top50_conf.new_venue_id.value_counts().index.values, node_id).sum())
-# FIXME 刪除沒有embedding的node當train
+# 刪除沒有embedding的node當train
 train2017 = train2017.loc[train2017.new_first_aId.isin(node_id)]
 train2017 = train2017.loc[train2017.new_venue_id.isin(node_id)]
 test2018 = test2018.loc[test2018.new_first_aId.isin(node_id)]
@@ -74,26 +81,26 @@ test2018 = test2018.loc[test2018.new_venue_id.isin(node_id)]
 
 
 # data generator
-def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32):
+def embedding_loader(emb_data, file_len, stage='train', graph="LINE", batch_size=32):
     while True:
         batch_x = []
         batch_y = []
         batch_paths = np.random.choice(a=file_len, size=batch_size)
         for batch_i in batch_paths:
-            # 根據新paper id 找出 aId, vId
-            vId, aId = dblp_top50_conf.loc[batch_i, ['new_venue_id', 'new_first_aId']]
-
-            # TODO find node id 在emb_data的index
-            # np.where(emb_data == batch_i)
-            # emb_p = emb_data[batch_i]
-
-            if graph=='LINE':
+            if stage == 'train':
+                # 根據新paper id 找出 aId, vId
+                vId, aId = dblp_top50_conf.loc[batch_i, ['new_venue_id', 'new_first_aId']]
+            elif stage == 'test':
+                vId, aId = dblp_top50_conf18.loc[batch_i, ['new_venue_id', 'new_first_aId']]
+            if graph == 'LINE':
                 # 找出該paper的所有資訊
+                # FIXME testing的embedding還沒有答案
                 emb_p = emb_data[str(batch_i)]  # paper emb
                 emb1 = emb_data[str(vId)]
                 emb2 = emb_data[str(int(aId))]
                 emb = np.concatenate((emb1, emb2), axis=None)
-            elif graph=="DeepWalk":
+            elif graph == "DeepWalk":
+                emb_p = emb_data[np.where(node_id == batch_i)]  # find node id 在emb_data的index
                 emb = np.hstack(emb_data[[vId, aId], :])  # np style
             batch_x += [emb]
             batch_y += [emb_p]
@@ -104,10 +111,10 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32):
 
 batch = 32
 # 先用2018前全部 train推薦系統, 2019的test推薦效果
-# train_history = model.fit_generator(embedding_loader(emb_2017, train2017.new_papr_id.values), epochs=1, steps_per_epoch=train2017.shape[0] / batch, verbose=1)
-train_history = model.fit_generator(embedding_loader(line_emb, train2017.new_papr_id.values), epochs=10, steps_per_epoch= train2017.shape[0] / batch, verbose=2)
+# train_history = model.fit_generator(embedding_loader(emb_2017, train2017.new_papr_id.values, 'train', "DeepWalk"), epochs=1, steps_per_epoch=train2017.shape[0] / batch, verbose=1)
+train_history = model.fit_generator(embedding_loader(line_emb, train2017.new_papr_id.values), epochs=10, steps_per_epoch=train2017.shape[0] / batch, verbose=2)
 
-test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values), steps= test2018.shape[0])  # FIXME predict的方式會不同
+test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values, 'test'), steps=test2018.shape[0])
 
 # TODO rolling的方式讓NN去學習embedding, for loop分年fit
 # for i in range(8):
