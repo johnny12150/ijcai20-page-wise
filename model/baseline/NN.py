@@ -1,13 +1,15 @@
 import pandas as pd
 import numpy as np
 import pickle
-from keras.models import Model
+from keras.models import Model, load_model
 from keras.layers import Input, Dense, concatenate
 from keras.utils.vis_utils import plot_model
 import graphviz
 import os
 from sklearn.neighbors import KNeighborsClassifier
 import ml_metrics as metrics
+import matplotlib.pyplot as plt
+import ast
 
 os.environ["PATH"] += os.pathsep + 'C:/Users/Wade/Anaconda3/Library/bin/graphviz'
 
@@ -16,32 +18,34 @@ bert_abstract = 768
 # output dim (就是graph embedding後的dim)
 emb_dim = 100
 
-# dblp_top50_conf = pd.read_pickle('preprocess/edge/paper_2011up_venue50.pkl')
+dblp_top50 = pd.read_pickle('preprocess/edge/paper_2011up_venue50.pkl')  # 有舊的paper_id跟references
+comparison = pd.Series(dblp_top50.new_papr_id.values, index=dblp_top50.id).to_dict()  # 新舊id對照表
+dblp_remain = pd.read_csv('preprocess/edge/dblp_remain_references.csv')  # references到的paper有在我們的pool裡
+dblp_remain = dblp_remain.loc[dblp_remain.references_amount > 0]  # 留有ref的
+dblp_remain['paper_id'] = dblp_remain.paper_id.map(comparison)  # 將舊id換成新的, map is much faster than using replace
+dblp_remain['paper_references'] = dblp_remain.paper_references.apply(lambda x: list(map(comparison.get, list(map(int, ast.literal_eval(x))))))
+remain_paper = dblp_top50.loc[(dblp_top50.new_papr_id.isin(dblp_remain.paper_id.values)) & (dblp_top50.time_step < 284)].new_papr_id.values  # 2018AAAI以前
 dblp_top50_conf = pd.read_pickle('preprocess/edge/paper_venue.pkl')
-dblp_top50_conf18 = dblp_top50_conf.copy()
 pa = pd.read_pickle('preprocess/edge/p_a_before284_delete_author.pkl')
 pa_extra = pd.read_pickle('preprocess/edge/p_a_delete_author.pkl')
 
 # FIXME train的時候只考慮第一作者 ?
 # https://stackoverflow.com/questions/20067636/pandas-dataframe-get-first-row-of-each-group
 dblp_top50_conf['new_first_aId'] = pa.groupby('new_papr_id').first()['new_author_id']  # 取每篇的第一作者
-dblp_top50_conf18['new_first_aId'] = pa_extra.groupby('new_papr_id').first()['new_author_id']
 dblp_top50_conf.dropna(subset=['new_first_aId'], inplace=True)  # 移除沒有作者的paper
-dblp_top50_conf18.dropna(subset=['new_first_aId'], inplace=True)
+# todo dblp_top50_conf18應該用不到
+dblp_top50_conf18 = dblp_top50_conf.copy()
 # select 2018以前全部當train
 train2017 = dblp_top50_conf.loc[dblp_top50_conf.year < 284, ['new_papr_id', 'new_venue_id', 'new_first_aId']]
 test2018 = dblp_top50_conf18.loc[dblp_top50_conf18.year >= 284, ['new_papr_id', 'new_venue_id', 'new_first_aId']]
 
-# todo 塞入bert
+# 塞入bert
 titles = pd.read_pickle('preprocess/edge/titles_bert.pkl')
 abstracts = pd.read_pickle('preprocess/edge/abstracts_bert.pkl')
 
 # https://stackoverflow.com/questions/41888085/how-to-implement-word2vec-cbow-in-keras-with-shared-embedding-layer-and-negative
 # 用一個network去逼近embedding
 all_in_one = Input(shape=(emb_dim*2+bert_title+bert_abstract,))
-# all_in_one = Input(shape=(emb_dim*2,))
-
-# out_emb = Dense(emb_dim, activation='sigmoid')(concatenate([paperId_emb, authorId_emb, title_emb, abstract_emb]))
 d1 = Dense(512, activation='linear')(all_in_one)
 d2 = Dense(400, activation='linear')(d1)
 d3 = Dense(256, activation='linear')(d2)
@@ -52,17 +56,19 @@ model = Model(input=all_in_one, output=out_emb)
 model.compile(optimizer='rmsprop', loss='mae')
 # plot_model(model, to_file='pics/model_LINE.png', show_shapes=True)
 
+# deepwalk
 node_id = np.load('preprocess/edge/node_id.npy').astype(int)
 emb_2017 = np.load('preprocess/edge/deep_walk_vec.npy')
-
 # line embedding
 with open('preprocess/edge/line_1and2.pkl', 'rb') as file:
     line_emb = pickle.load(file)
+
 # 檢查是否所有dblp的node都在embedding裡面
-print(np.isin(train2017.new_papr_id.values, node_id).sum())
-print(np.isin(train2017.new_papr_id.values, np.fromiter(line_emb.keys(), dtype=int)).sum())
-print(np.isin(pa.new_author_id.value_counts().index.values, node_id).sum())
-print(np.isin(dblp_top50_conf.new_venue_id.value_counts().index.values, node_id).sum())
+# print(np.isin(train2017.new_papr_id.values, node_id).sum())
+# print(np.isin(train2017.new_papr_id.values, np.fromiter(line_emb.keys(), dtype=int)).sum())
+# print(np.isin(pa.new_author_id.value_counts().index.values, node_id).sum())
+# print(np.isin(dblp_top50_conf.new_venue_id.value_counts().index.values, node_id).sum())
+
 # 刪除沒有embedding的node當train
 train2017 = train2017.loc[train2017.new_first_aId.isin(node_id)]
 train2017 = train2017.loc[train2017.new_venue_id.isin(node_id)]
@@ -118,26 +124,37 @@ train_history = model.fit_generator(embedding_loader(emb_2017, train2017.new_pap
 # train_history = model.fit_generator(embedding_loader(line_emb, train2017.new_papr_id.values), epochs=10, steps_per_epoch=train2017.shape[0] / batch, verbose=2)
 
 # save model
-model.save('model/hdf5/model_deepwalk.h5')
+# model.save('model/hdf5/model_deepwalk.h5')
 
 # FIXME testing的embedding還沒有答案
 test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values, 'test'), steps=test2018.shape[0]/ batch, workers=4)
 
 # 產生 X為embedding, y為id的pair
-y = train2017.new_papr_id.values
+y = train2017[train2017.new_papr_id.isin(remain_paper)].new_papr_id.values
 X = emb_2017[y]
 
+model = load_model('model/hdf5/model_deepwalk.h5')
+predictions = model.predict_generator(embedding_loader(emb_2017, y, 'train', 'DeepWalk', 256), steps=len(y)/ 256)
 # todo 一次load全部data做predict
-predictions = model.predict_generator(embedding_loader(emb_2017, train2017.new_papr_id.values, 'train', 'DeepWalk'), steps=test2018.shape[0]/ batch)
-# predictions = model.predict_generator(X, workers=4)
+# predictions = model.predict(X, workers=4)
 
 # 找出跟NN predict出最相似的embedding當作要推薦cite的論文
 neigh = KNeighborsClassifier(n_neighbors=3, n_jobs=4)
 neigh.fit(X, y)
-n_predictions = neigh.predict(predictions)  # 每row的預測paper id
-# FIXME 想辦法推出1篇以上
+first_predictions = neigh.predict(predictions)  # 每row的預測paper id
+# 透過機率找出最大的幾篇來推
+n_predictions = neigh.predict_proba(predictions)
+print(neigh.classes_)
 
-# FIXME 算MAP
+# 算MAP
+# FIXME 答案應該是ref而不是paper id
+print(metrics.mapk(y.tolist(), first_predictions, 1))
+# todo 從dblp_remain找對應paper的references
+plt.bar('Hot', metrics.mapk(y.tolist(), hot, 1))
+plt.bar('RS', metrics.mapk(y.tolist(), first_predictions, 1))
+plt.ylabel('score')
+plt.title('MAP@1')
+plt.show()
 
 
 # TODO rolling的方式讓NN去學習embedding, for loop分年fit
