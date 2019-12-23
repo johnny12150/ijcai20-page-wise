@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import pickle
 from keras.models import Model, load_model
-from keras.layers import Input, Dense, concatenate
+from keras.layers import Input, Dense, BatchNormalization
 from keras.utils.vis_utils import plot_model
 import graphviz
 import os
@@ -10,6 +10,7 @@ from sklearn.neighbors import KNeighborsClassifier
 import ml_metrics as metrics
 import matplotlib.pyplot as plt
 import ast
+from collections import Counter
 
 os.environ["PATH"] += os.pathsep + 'C:/Users/Wade/Anaconda3/Library/bin/graphviz'
 
@@ -39,17 +40,18 @@ dblp_top50_conf18 = dblp_top50_conf.copy()
 train2017 = dblp_top50_conf.loc[dblp_top50_conf.year < 284, ['new_papr_id', 'new_venue_id', 'new_first_aId']]
 test2018 = dblp_top50_conf18.loc[dblp_top50_conf18.year >= 284, ['new_papr_id', 'new_venue_id', 'new_first_aId']]
 
-# 塞入bert
+# 塞入bert FIXME normalize
 titles = pd.read_pickle('preprocess/edge/titles_bert.pkl')
 abstracts = pd.read_pickle('preprocess/edge/abstracts_bert.pkl')
 
 # https://stackoverflow.com/questions/41888085/how-to-implement-word2vec-cbow-in-keras-with-shared-embedding-layer-and-negative
 # 用一個network去逼近embedding
 all_in_one = Input(shape=(emb_dim*2+bert_title+bert_abstract,))
-d1 = Dense(512, activation='linear')(all_in_one)
-d2 = Dense(400, activation='linear')(d1)
-d3 = Dense(256, activation='linear')(d2)
-out_emb = Dense(emb_dim, activation='sigmoid')(d3)
+BN = BatchNormalization()(all_in_one)
+d1 = Dense(512, activation='tanh')(BN)
+d2 = Dense(400, activation='tanh')(d1)
+d3 = Dense(256, activation='tanh')(d2)
+out_emb = Dense(emb_dim, activation='linear')(d3)
 model = Model(input=all_in_one, output=out_emb)
 
 # 最後一層用sigmoid/ linear輸出100個units, loss用mae硬做
@@ -117,14 +119,20 @@ def embedding_loader(emb_data, file_len, stage='train', graph="LINE", batch_size
         yield batch_x, batch_y
 
 
-batch = 32
+batch = 128
 # 先用2018前全部 train推薦系統, 2019的test推薦效果
-train_history = model.fit_generator(embedding_loader(emb_2017, train2017.new_papr_id.values, 'train', 'DeepWalk'), epochs=10, steps_per_epoch=train2017.shape[0] / batch, verbose=2)
+train_history = model.fit_generator(embedding_loader(emb_2017, train2017.new_papr_id.values, 'train', 'DeepWalk', batch), epochs=10, steps_per_epoch=train2017.shape[0] / batch, verbose=2)
 
 # train_history = model.fit_generator(embedding_loader(line_emb, train2017.new_papr_id.values), epochs=10, steps_per_epoch=train2017.shape[0] / batch, verbose=2)
 
 # save model
-# model.save('model/hdf5/model_deepwalk.h5')
+model.save('model/hdf5/model_deepwalk.h5')
+model.save('model/hdf5/model_deepwalk_BN.h5')
+
+# 查看weight
+print(len(model.layers))
+first_layer_weights = model.layers[1].get_weights()[0]  # d1的weight
+first_layer_bias = model.layers[1].get_weights()[1]
 
 # FIXME testing的embedding還沒有答案
 test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values, 'test'), steps=test2018.shape[0]/ batch, workers=4)
@@ -149,6 +157,12 @@ print(neigh.classes_)
 # 算MAP
 # FIXME 答案應該是ref而不是paper id
 print(metrics.mapk(y.tolist(), first_predictions, 1))
+all_refs = []
+for i, data in dblp_remain.paper_references.iteritems():
+    all_refs.extend(ast.literal_eval(data))
+all_refs = Counter(all_refs)
+hot_1 = all_refs.most_common(1)[0][0]
+
 # todo 從dblp_remain找對應paper的references
 plt.bar('Hot', metrics.mapk(y.tolist(), hot, 1))
 plt.bar('RS', metrics.mapk(y.tolist(), first_predictions, 1))
