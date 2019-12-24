@@ -42,20 +42,6 @@ test2018 = dblp_top50_conf.loc[dblp_top50_conf.year >= 284, ['new_papr_id', 'new
 titles = pd.read_pickle('preprocess/edge/titles_bert.pkl')
 abstracts = pd.read_pickle('preprocess/edge/abstracts_bert.pkl')
 
-# https://stackoverflow.com/questions/41888085/how-to-implement-word2vec-cbow-in-keras-with-shared-embedding-layer-and-negative
-# 用一個network去逼近embedding
-all_in_one = Input(shape=(emb_dim*2+bert_title+bert_abstract,))
-BN = BatchNormalization()(all_in_one)
-d1 = Dense(512, activation='tanh')(BN)
-d2 = Dense(400, activation='tanh')(d1)
-d3 = Dense(256, activation='tanh')(d2)
-out_emb = Dense(emb_dim, activation='linear')(d3)
-model = Model(input=all_in_one, output=out_emb)
-
-# 最後一層用sigmoid/ linear輸出100個units, loss用mae硬做
-model.compile(optimizer='rmsprop', loss='mae')
-# plot_model(model, to_file='pics/model_LINE.png', show_shapes=True)
-
 # deepwalk, FIXME 對column normalize
 node_id = np.load('preprocess/edge/node_id.npy').astype(int)
 emb_2017 = np.load('preprocess/edge/deep_walk_vec.npy')
@@ -120,6 +106,21 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1)
             yield batch_x, batch_paths, batch_y
 
 
+# https://stackoverflow.com/questions/41888085/how-to-implement-word2vec-cbow-in-keras-with-shared-embedding-layer-and-negative
+# 用一個network去逼近embedding
+all_in_one = Input(shape=(emb_dim*2+bert_title+bert_abstract,))
+BN = BatchNormalization()(all_in_one)
+d1 = Dense(512, activation='tanh')(BN)
+d1 = BatchNormalization()(d1)
+d2 = Dense(400, activation='tanh')(d1)
+d2 = BatchNormalization()(d2)
+d3 = Dense(256, activation='tanh')(d2)
+out_emb = Dense(emb_dim, activation='linear')(d3)
+model = Model(input=all_in_one, output=out_emb)
+
+# 最後一層用sigmoid/ linear輸出100個units, loss用mae硬做
+model.compile(optimizer='rmsprop', loss='mae')
+# plot_model(model, to_file='pics/model_LINE.png', show_shapes=True)
 
 batch = 128
 # 先用2018前全部 train推薦系統, 2019的test推薦效果
@@ -148,25 +149,32 @@ sort_y = np.sort(shuffled_y, axis=None)
 x_all = x_all[sorter]  # 所有input
 paper_emb = paper_emb[sorter]  # 100維的paper_emb
 
-model = load_model('model/hdf5/model_deepwalk.h5')
+model = load_model('model/hdf5/model_deepwalk_BN.h5')
 # predictions = model.predict_generator(embedding_loader(emb_2017, y, 'DeepWalk', 256), steps=len(y)/ 256)
 # 一次load全部data做predict
 predictions = model.predict(x_all, workers=4)  # 預測paper_emb
 # 找出跟NN predict出最相似的embedding當作要推薦cite的論文
-neigh = KNeighborsClassifier(n_neighbors=3, n_jobs=4)
+neigh = KNeighborsClassifier(n_neighbors=10, algorithm='kd_tree', n_jobs=4)  # algorithm='kd_tree', will use less memory
 neigh.fit(paper_emb, sort_y)
-# neigh.fit(x_all, ans1)
 first_predictions = neigh.predict(predictions)  # 每row的預測ref的paper id
 # 透過機率找出最大的幾篇來推
+k_predictions = neigh.kneighbors(X=predictions, n_neighbors=30, return_distance=False)
 n_predictions = neigh.predict_proba(predictions)
-# print(neigh.classes_)
+sort_n = np.argsort(n_predictions)
+papers = neigh.classes_
+for (x,y), value in np.ndenumerate(sort_n):
+    # 每row依照其順序排列
+    print(papers[value][:150])  # 推前150個接近
+    break
+
+# n_papers = np.repeat(papers, papers.shape[0], axis=0)  # FIXME Memory error
+# sort_n_papers = n_papers[sort_n]  # 每row依照其順序排列
 
 # 算MAP
-# FIXME 答案應該是ref而不是paper id
 ans = dblp_remain[dblp_remain.paper_id.isin(y)].sort_values(by=['paper_id']).reset_index(drop=True)
 ans1 = ans.paper_references.apply(lambda x: x[0]).values
 print(metrics.mapk(ans1.reshape((-1, 1)).tolist(), first_predictions.reshape((-1, 1)).tolist(), 1))
-# todo use new MAP func
+
 # 產生hot
 all_refs = []
 for i, data in dblp_remain.paper_references.iteritems():
@@ -175,8 +183,6 @@ all_refs = Counter(all_refs)
 hot_1 = all_refs.most_common(1)[0][0]
 hot_10 = [m[0] for m in all_refs.most_common(10)]
 
-
-# todo 從dblp_remain找對應paper的references
 plt.bar('Hot', metrics.mapk(ans1.reshape((-1, 1)).tolist(), np.array([hot_1]*ans1.shape[0]).reshape((-1, 1)).tolist(), 1))
 plt.bar('RS', metrics.mapk(ans1.reshape((-1, 1)).tolist(), first_predictions.reshape((-1, 1)).tolist(), 1))
 plt.ylabel('score')
