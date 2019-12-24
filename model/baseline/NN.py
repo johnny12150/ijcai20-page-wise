@@ -90,6 +90,9 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1)
         batch_x = []
         batch_y = []
         batch_paths = np.random.choice(a=file_len, size=batch_size)
+        if not shuffle:
+            np.random.shuffle(file_len)  # 確保不會像choice有重複取到的可能
+            batch_paths = file_len
         for batch_i in batch_paths:
             emb_t = titles.iloc[batch_i]  # 找該paper的title, abstract
             emb_a = abstracts.iloc[batch_i]
@@ -114,7 +117,7 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1)
         if shuffle:
             yield batch_x, batch_y
         else:
-            yield batch_x, batch_paths
+            yield batch_x, batch_paths, batch_y
 
 
 
@@ -138,19 +141,21 @@ test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_
 
 # 產生 X為embedding, y為id的pair
 y = train2017[train2017.new_papr_id.isin(remain_paper)].new_papr_id.values
-X = emb_2017[y]  # FIXME 從node id找paper id
-x_all, shuffled_y = next(embedding_loader(emb_2017, y, 'DeepWalk', y.shape[0], 0))  # 裡面會shuffle過
+# X = emb_2017[y]  # FIXME 從node id找paper id
+x_all, shuffled_y, paper_emb = next(embedding_loader(emb_2017, y, 'DeepWalk', y.shape[0], 0))  # 裡面會shuffle過
 sorter = shuffled_y.argsort()
-x_all = x_all[sorter]
+sort_y = np.sort(shuffled_y, axis=None)
+x_all = x_all[sorter]  # 所有input
+paper_emb = paper_emb[sorter]  # 100維的paper_emb
 
 model = load_model('model/hdf5/model_deepwalk.h5')
 # predictions = model.predict_generator(embedding_loader(emb_2017, y, 'DeepWalk', 256), steps=len(y)/ 256)
 # 一次load全部data做predict
-predictions = model.predict(x_all, workers=4)
-
+predictions = model.predict(x_all, workers=4)  # 預測paper_emb
 # 找出跟NN predict出最相似的embedding當作要推薦cite的論文
 neigh = KNeighborsClassifier(n_neighbors=3, n_jobs=4)
-neigh.fit(X, y)
+neigh.fit(paper_emb, sort_y)
+# neigh.fit(x_all, ans1)
 first_predictions = neigh.predict(predictions)  # 每row的預測ref的paper id
 # 透過機率找出最大的幾篇來推
 n_predictions = neigh.predict_proba(predictions)
@@ -158,17 +163,22 @@ n_predictions = neigh.predict_proba(predictions)
 
 # 算MAP
 # FIXME 答案應該是ref而不是paper id
-ans1 = dblp_remain[dblp_remain.isin(y)].sort_values(by=['paper_id']).paper_references.apply(lambda x: list(map(int, ast.literal_eval(x)))[0])
-print(metrics.mapk(ans1.tolist(), first_predictions, 1))
+ans = dblp_remain[dblp_remain.paper_id.isin(y)].sort_values(by=['paper_id']).reset_index(drop=True)
+ans1 = ans.paper_references.apply(lambda x: x[0]).values
+print(metrics.mapk(ans1.reshape((-1, 1)).tolist(), first_predictions.reshape((-1, 1)).tolist(), 1))
+# todo use new MAP func
+# 產生hot
 all_refs = []
 for i, data in dblp_remain.paper_references.iteritems():
-    all_refs.extend(ast.literal_eval(data))
+    all_refs.extend(data)
 all_refs = Counter(all_refs)
 hot_1 = all_refs.most_common(1)[0][0]
+hot_10 = [m[0] for m in all_refs.most_common(10)]
+
 
 # todo 從dblp_remain找對應paper的references
-plt.bar('Hot', metrics.mapk(y.tolist(), hot, 1))
-plt.bar('RS', metrics.mapk(y.tolist(), first_predictions, 1))
+plt.bar('Hot', metrics.mapk(ans1.reshape((-1, 1)).tolist(), np.array([hot_1]*ans1.shape[0]).reshape((-1, 1)).tolist(), 1))
+plt.bar('RS', metrics.mapk(ans1.reshape((-1, 1)).tolist(), first_predictions.reshape((-1, 1)).tolist(), 1))
 plt.ylabel('score')
 plt.title('MAP@1')
 plt.show()
