@@ -142,7 +142,6 @@ test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_
 
 # 產生 X為embedding, y為id的pair
 y = train2017[train2017.new_papr_id.isin(remain_paper)].new_papr_id.values
-# X = emb_2017[y]  # FIXME 從node id找paper id
 x_all, shuffled_y, paper_emb = next(embedding_loader(emb_2017, y, 'DeepWalk', y.shape[0], 0))  # 裡面會shuffle過
 sorter = shuffled_y.argsort()
 sort_y = np.sort(shuffled_y, axis=None)
@@ -150,30 +149,39 @@ x_all = x_all[sorter]  # 所有input
 paper_emb = paper_emb[sorter]  # 100維的paper_emb
 
 model = load_model('model/hdf5/model_deepwalk_BN.h5')
-# predictions = model.predict_generator(embedding_loader(emb_2017, y, 'DeepWalk', 256), steps=len(y)/ 256)
 # 一次load全部data做predict
 predictions = model.predict(x_all, workers=4)  # 預測paper_emb
+np.save('model/baseline/tmp/embedding_predictions.npy', predictions)
+
+K = 30
+predictions = np.load('model/baseline/tmp/embedding_predictions.npy')
 # 找出跟NN predict出最相似的embedding當作要推薦cite的論文
-neigh = KNeighborsClassifier(n_neighbors=10, algorithm='kd_tree', n_jobs=4)  # algorithm='kd_tree', will use less memory
+neigh = KNeighborsClassifier(n_neighbors=K, algorithm='kd_tree', n_jobs=4)  # algorithm='kd_tree', will use less memory
 neigh.fit(paper_emb, sort_y)
 first_predictions = neigh.predict(predictions)  # 每row的預測ref的paper id
-# 透過機率找出最大的幾篇來推
-k_predictions = neigh.kneighbors(X=predictions, n_neighbors=30, return_distance=False)
-n_predictions = neigh.predict_proba(predictions)
-sort_n = np.argsort(n_predictions)
+k_predictions = neigh.kneighbors(X=predictions, n_neighbors=K, return_distance=False)
+# 找出index所代表的paper_id
 papers = neigh.classes_
-for (x,y), value in np.ndenumerate(sort_n):
-    # 每row依照其順序排列
-    print(papers[value][:150])  # 推前150個接近
-    break
+recommend_papers = np.zeros((k_predictions.shape[0], k_predictions.shape[1]))
+i = 0
+for row in k_predictions:
+    recommend_papers[i] = papers[row]  # 從KNN index轉成paper_id
+    i += 1
 
-# n_papers = np.repeat(papers, papers.shape[0], axis=0)  # FIXME Memory error
-# sort_n_papers = n_papers[sort_n]  # 每row依照其順序排列
+
+# n_predictions = neigh.predict_proba(predictions)  # 透過機率找出最大的幾篇來推
+# sort_n = np.argsort(n_predictions)
+# for (x,y), value in np.ndenumerate(sort_n):
+#     # 每row依照其順序排列
+#     print(papers[value][:150])  # 推前150個接近
+#     break
 
 # 算MAP
 ans = dblp_remain[dblp_remain.paper_id.isin(y)].sort_values(by=['paper_id']).reset_index(drop=True)
 ans1 = ans.paper_references.apply(lambda x: x[0]).values
-print(metrics.mapk(ans1.reshape((-1, 1)).tolist(), first_predictions.reshape((-1, 1)).tolist(), 1))
+ansK = ans.paper_references.apply(lambda x: x[:K]).values
+# print(metrics.mapk(ans1.reshape((-1, 1)).tolist(), first_predictions.reshape((-1, 1)).tolist(), 1))
+print(metrics.mapk(ansK.tolist(), recommend_papers.tolist(), K))
 
 # 產生hot
 all_refs = []
@@ -181,12 +189,12 @@ for i, data in dblp_remain.paper_references.iteritems():
     all_refs.extend(data)
 all_refs = Counter(all_refs)
 hot_1 = all_refs.most_common(1)[0][0]
-hot_10 = [m[0] for m in all_refs.most_common(10)]
+hot_30 = [m[0] for m in all_refs.most_common(K)]
 
-plt.bar('Hot', metrics.mapk(ans1.reshape((-1, 1)).tolist(), np.array([hot_1]*ans1.shape[0]).reshape((-1, 1)).tolist(), 1))
-plt.bar('RS', metrics.mapk(ans1.reshape((-1, 1)).tolist(), first_predictions.reshape((-1, 1)).tolist(), 1))
+plt.bar('Hot', metrics.mapk(ansK.tolist(), np.array([hot_30]*ansK.shape[0]).tolist(), K))
+plt.bar('RS', metrics.mapk(ansK.tolist(), recommend_papers.tolist(), K))
 plt.ylabel('score')
-plt.title('MAP@1')
+plt.title('MAP@30')
 plt.show()
 
 
