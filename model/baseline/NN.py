@@ -1,8 +1,6 @@
 import pandas as pd
 import numpy as np
 import pickle
-from keras.models import Model, load_model
-from keras.layers import Input, Dense, BatchNormalization
 from keras.utils.vis_utils import plot_model
 import graphviz
 import os
@@ -11,13 +9,14 @@ import ml_metrics as metrics
 import matplotlib.pyplot as plt
 import ast
 from collections import Counter
+from keras.models import Model, load_model
+from keras.layers import Input, Dense, BatchNormalization
 
 os.environ["PATH"] += os.pathsep + 'C:/Users/Wade/Anaconda3/Library/bin/graphviz'
 
 bert_title = 768
 bert_abstract = 768
-# output dim (就是graph embedding後的dim)
-emb_dim = 100
+emb_dim = 100  # output dim (就是graph embedding後的dim)
 
 dblp_top50 = pd.read_pickle('preprocess/edge/paper_2011up_venue50.pkl')  # 有舊的paper_id跟references
 comparison = pd.Series(dblp_top50.new_papr_id.values, index=dblp_top50.id).to_dict()  # 新舊id對照表
@@ -29,14 +28,16 @@ remain_paper = dblp_top50.loc[(dblp_top50.new_papr_id.isin(dblp_remain.paper_id.
 dblp_top50_conf = pd.read_pickle('preprocess/edge/paper_venue.pkl')
 pa = pd.read_pickle('preprocess/edge/p_a_before284_delete_author.pkl')
 pa_extra = pd.read_pickle('preprocess/edge/p_a_delete_author.pkl')
+pp = pd.read_pickle('preprocess/edge/paper_paper.pkl')
 
 # FIXME train的時候只考慮第一作者 ?
 # https://stackoverflow.com/questions/20067636/pandas-dataframe-get-first-row-of-each-group
 dblp_top50_conf['new_first_aId'] = pa.groupby('new_papr_id').first()['new_author_id']  # 取每篇的第一作者
+dblp_top50_conf['references'] = dblp_top50['references']
 dblp_top50_conf.dropna(subset=['new_first_aId'], inplace=True)  # 移除沒有作者的paper
 # select 2018以前全部當train
-train2017 = dblp_top50_conf.loc[dblp_top50_conf.year < 284, ['new_papr_id', 'new_venue_id', 'new_first_aId']]
-test2018 = dblp_top50_conf.loc[dblp_top50_conf.year >= 284, ['new_papr_id', 'new_venue_id', 'new_first_aId']]
+train2017 = dblp_top50_conf.loc[dblp_top50_conf.year < 284, ['new_papr_id', 'new_venue_id', 'new_first_aId', 'references']]
+test2018 = dblp_top50_conf.loc[dblp_top50_conf.year >= 284, ['new_papr_id', 'new_venue_id', 'new_first_aId', 'references']]
 
 # 塞入bert FIXME normalize
 titles = pd.read_pickle('preprocess/edge/titles_bert.pkl')
@@ -58,6 +59,7 @@ with open('preprocess/edge/line_1and2.pkl', 'rb') as file:
 # 刪除沒有embedding的node當train
 train2017 = train2017.loc[train2017.new_first_aId.isin(node_id)]
 train2017 = train2017.loc[train2017.new_venue_id.isin(node_id)]
+train2017.dropna(subset=['references'], inplace=True)
 test2018 = test2018.loc[test2018.new_first_aId.isin(node_id)]
 test2018 = test2018.loc[test2018.new_venue_id.isin(node_id)]
 
@@ -141,7 +143,8 @@ first_layer_bias = model.layers[1].get_weights()[1]
 test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values), steps=test2018.shape[0]/ batch)
 
 # 產生 X為embedding, y為id的pair
-y = train2017[train2017.new_papr_id.isin(remain_paper)].new_papr_id.values
+# y = train2017[train2017.new_papr_id.isin(remain_paper)].new_papr_id.values
+y = train2017.new_papr_id.values
 x_all, shuffled_y, paper_emb = next(embedding_loader(emb_2017, y, 'DeepWalk', y.shape[0], 0))  # 裡面會shuffle過
 sorter = shuffled_y.argsort()
 sort_y = np.sort(shuffled_y, axis=None)
@@ -153,10 +156,10 @@ model = load_model('model/hdf5/model_deepwalk_BN.h5')
 predictions = model.predict(x_all, workers=4)  # 預測paper_emb
 np.save('model/baseline/tmp/embedding_predictions.npy', predictions)
 
-K = 30
+K = 150
 predictions = np.load('model/baseline/tmp/embedding_predictions.npy')
 # 找出跟NN predict出最相似的embedding當作要推薦cite的論文
-neigh = KNeighborsClassifier(n_neighbors=K, algorithm='kd_tree', n_jobs=4)  # algorithm='kd_tree', will use less memory
+neigh = KNeighborsClassifier(n_neighbors=K, algorithm='ball_tree', n_jobs=4)  # algorithm='kd_tree', will use less memory
 neigh.fit(paper_emb, sort_y)
 first_predictions = neigh.predict(predictions)  # 每row的預測ref的paper id
 k_predictions = neigh.kneighbors(X=predictions, n_neighbors=K, return_distance=False)
@@ -176,10 +179,13 @@ for row in k_predictions:
 #     print(papers[value][:150])  # 推前150個接近
 #     break
 
-# 算MAP
-ans = dblp_remain[dblp_remain.paper_id.isin(y)].sort_values(by=['paper_id']).reset_index(drop=True)
-ans1 = ans.paper_references.apply(lambda x: x[0]).values
-ansK = ans.paper_references.apply(lambda x: x[:K]).values
+
+# 算MAP, FIXME 答案改成所有graph內node
+# ans = dblp_remain[dblp_remain.paper_id.isin(y)].sort_values(by=['paper_id']).reset_index(drop=True)
+ans = train2017.sort_values(by=['new_papr_id']).reset_index(drop=True)
+ansK = ans.references.apply(lambda x: list(map(comparison.get, list(map(int, ast.literal_eval(x)))))[:K]).values
+# ans1 = ans.paper_references.apply(lambda x: x[0]).values
+# ansK = ans.paper_references.apply(lambda x: x[:K]).values
 # print(metrics.mapk(ans1.reshape((-1, 1)).tolist(), first_predictions.reshape((-1, 1)).tolist(), 1))
 print(metrics.mapk(ansK.tolist(), recommend_papers.tolist(), K))
 
@@ -188,13 +194,13 @@ all_refs = []
 for i, data in dblp_remain.paper_references.iteritems():
     all_refs.extend(data)
 all_refs = Counter(all_refs)
-hot_1 = all_refs.most_common(1)[0][0]
-hot_30 = [m[0] for m in all_refs.most_common(K)]
+# hot_1 = all_refs.most_common(1)[0][0]
+hot = [m[0] for m in all_refs.most_common(K)]
 
-plt.bar('Hot', metrics.mapk(ansK.tolist(), np.array([hot_30]*ansK.shape[0]).tolist(), K))
+plt.bar('Hot', metrics.mapk(ansK.tolist(), np.array([hot]*ansK.shape[0]).tolist(), K))
 plt.bar('RS', metrics.mapk(ansK.tolist(), recommend_papers.tolist(), K))
 plt.ylabel('score')
-plt.title('MAP@30')
+plt.title('train MAP@'+str(K))
 plt.show()
 
 
