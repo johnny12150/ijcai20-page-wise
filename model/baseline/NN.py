@@ -46,14 +46,14 @@ test2018 = dblp_top50_conf.loc[dblp_top50_conf.year >= 284, ['new_papr_id', 'new
 # 塞入bert
 titles = pd.read_pickle('preprocess/edge/titles_bert.pkl')
 abstracts = pd.read_pickle('preprocess/edge/abstracts_bert.pkl')
-# normalize column/ feature FIXME 嘗試改axis=1
-titles = preprocessing.normalize(np.array(titles.tolist()), axis=0)
-abstracts = preprocessing.normalize(np.array(abstracts.tolist()), axis=0)
+# normalize column/ feature
+# titles = preprocessing.scale(np.array(titles.tolist()))
+# abstracts = preprocessing.scale(np.array(abstracts.tolist()))
 
 # deepwalk
 node_id = np.load('preprocess/edge/node_id.npy').astype(int)
 emb_2017 = np.load('preprocess/edge/deep_walk_vec.npy')
-emb_2017 = preprocessing.normalize(emb_2017, axis=0)
+# emb_2017 = preprocessing.scale(emb_2017)
 # line embedding
 with open('preprocess/edge/line_1and2.pkl', 'rb') as file:
     line_emb = pickle.load(file)
@@ -194,27 +194,37 @@ np.save('model/baseline/tmp/embedding_predictions.npy', predictions)
 
 K = 150
 predictions = np.load('model/baseline/tmp/embedding_predictions.npy')
+# todo 測試一下knn的效能
 # 找出跟NN predict出最相似的embedding當作要推薦cite的論文
-neigh = KNeighborsClassifier(n_neighbors=1, algorithm='ball_tree', n_jobs=4)  # algorithm='kd_tree', will use less memory
-neigh.fit(paper_emb, sort_y)
-first_predictions = neigh.predict(predictions)  # 每row的預測ref的paper id
-k_predictions = neigh.kneighbors(X=predictions, n_neighbors=K, return_distance=False)
+# neigh = KNeighborsClassifier(n_neighbors=1, algorithm='ball_tree', n_jobs=4)  # algorithm='kd_tree', will use less memory
+# neigh.fit(paper_emb, sort_y)
+# first_predictions = neigh.predict(predictions)  # 每row的預測ref的paper id
+# k_predictions = neigh.kneighbors(X=predictions, n_neighbors=K, return_distance=False)
 # 找出index所代表的paper_id
-papers = neigh.classes_
-recommend_papers = np.zeros((k_predictions.shape[0], k_predictions.shape[1]))
-i = 0
-for row in k_predictions:
-    recommend_papers[i] = papers[row]  # 從KNN index轉成paper_id
-    i += 1
+# papers = neigh.classes_
+# recommend_papers = np.zeros((k_predictions.shape[0], k_predictions.shape[1]))
+# i = 0
+# for row in k_predictions:
+#     recommend_papers[i] = papers[row]  # 從KNN index轉成paper_id
+#     i += 1
+
+# 改算dot score當相似度
+recommend_papers = np.zeros((predictions.shape[0], K))
+for i in range(predictions.shape[0]):
+    scores = np.dot(paper_emb, predictions[i])
+    recommend_papers[i] = sort_y[np.argsort(scores)][:K]
 
 
 # 算MAP
 # ans = dblp_remain[dblp_remain.paper_id.isin(y)].sort_values(by=['paper_id']).reset_index(drop=True)
 ans = train2017.sort_values(by=['new_papr_id']).reset_index(drop=True)
-ansK = ans.references.apply(lambda x: list(map(comparison.get, list(map(int, ast.literal_eval(x)))))[:K]).values
+ansK = ans.references.apply(lambda x: list(filter(None.__ne__, list(map(comparison.get, map(int, ast.literal_eval(x)))))))
 # ans1 = ans.paper_references.apply(lambda x: x[0]).values
 # ansK = ans.paper_references.apply(lambda x: x[:K]).values
 # print(metrics.mapk(ans1.reshape((-1, 1)).tolist(), first_predictions.reshape((-1, 1)).tolist(), 1))
+# FIXME row數不對
+# ans = paper_refs[paper_refs.new_papr_id.isin(train2017['new_papr_id'].values)]
+# ansK = ans['join'].apply(lambda x: list(map(int, x.split(','))))
 print(metrics.mapk(ansK.tolist(), recommend_papers.tolist(), K))
 
 # 產生hot
@@ -230,10 +240,4 @@ plt.bar('RS', metrics.mapk(ansK.tolist(), recommend_papers.tolist(), K))
 plt.ylabel('score')
 plt.title('train MAP@'+str(K))
 plt.show()
-
-
-# TODO rolling的方式讓NN去學習embedding, for loop分年fit
-# for i in range(8):
-#     model.fit()
-
 
