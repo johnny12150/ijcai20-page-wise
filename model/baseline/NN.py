@@ -9,6 +9,7 @@ import ml_metrics as metrics
 import matplotlib.pyplot as plt
 import ast
 from collections import Counter
+from sklearn import preprocessing
 from keras.models import Model, load_model
 from keras.layers import Input, Dense, BatchNormalization
 
@@ -45,10 +46,14 @@ test2018 = dblp_top50_conf.loc[dblp_top50_conf.year >= 284, ['new_papr_id', 'new
 # 塞入bert
 titles = pd.read_pickle('preprocess/edge/titles_bert.pkl')
 abstracts = pd.read_pickle('preprocess/edge/abstracts_bert.pkl')
+# normalize column/ feature FIXME 嘗試改axis=1
+titles = preprocessing.normalize(np.array(titles.tolist()), axis=0)
+abstracts = preprocessing.normalize(np.array(abstracts.tolist()), axis=0)
 
-# deepwalk,
+# deepwalk
 node_id = np.load('preprocess/edge/node_id.npy').astype(int)
 emb_2017 = np.load('preprocess/edge/deep_walk_vec.npy')
+emb_2017 = preprocessing.normalize(emb_2017, axis=0)
 # line embedding
 with open('preprocess/edge/line_1and2.pkl', 'rb') as file:
     line_emb = pickle.load(file)
@@ -88,8 +93,10 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1)
             np.random.shuffle(file_len)  # 確保不會像choice有重複取到的可能
             batch_paths = file_len
         for batch_i in batch_paths:
-            emb_t = titles.iloc[batch_i]  # 找該paper的title, abstract
-            emb_a = abstracts.iloc[batch_i]
+            # emb_t = titles.iloc[batch_i]  # 找該paper的title, abstract
+            # emb_a = abstracts.iloc[batch_i]
+            emb_t = titles[batch_i]
+            emb_a = abstracts[batch_i]
             # 根據新paper id 找出 aId, vId
             vId, aId = dblp_top50_conf.loc[batch_i, ['new_venue_id', 'new_first_aId']]
             if graph == 'LINE':
@@ -124,11 +131,13 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1)
 all_in_one = Input(shape=(emb_dim*2+bert_title+bert_abstract,))
 BN = BatchNormalization()(all_in_one)
 d1 = Dense(512, activation='tanh')(BN)
-d1 = BatchNormalization()(d1)
+# d1 = BatchNormalization()(d1)
 d2 = Dense(400, activation='tanh')(d1)
-d2 = BatchNormalization()(d2)
+# d2 = BatchNormalization()(d2)
 d3 = Dense(256, activation='tanh')(d2)
-out_emb = Dense(emb_dim, activation='linear')(d3)
+d4 = Dense(200, activation='tanh')(d3)
+d5 = Dense(128, activation='tanh')(d4)
+out_emb = Dense(emb_dim, activation='linear')(d5)
 model = Model(input=all_in_one, output=out_emb)
 print(model.summary())
 
@@ -138,12 +147,12 @@ model.compile(optimizer='rmsprop', loss='mae')
 
 batch = 128
 # 先用2018前全部 train推薦系統, 2019的test推薦效果
-train_history = model.fit_generator(embedding_loader(emb_2017, train2017.new_papr_id.values, 'GraphSAGE', batch), epochs=10, steps_per_epoch=train2017.shape[0] / batch, verbose=2)
+train_history = model.fit_generator(embedding_loader(emb_2017, train2017.new_papr_id.values, 'DeepWalk', batch), epochs=10, steps_per_epoch=train2017.shape[0] / batch, verbose=2)
 
 # train_history = model.fit_generator(embedding_loader(line_emb, train2017.new_papr_id.values), epochs=10, steps_per_epoch=train2017.shape[0] / batch, verbose=2)
 
 # save model
-model.save('model/hdf5/model_deepwalk.h5')
+model.save('model/hdf5/model_deepwalk_BN.h5')
 model.save('model/hdf5/model_gSAGE_BN.h5')
 
 # 查看weight

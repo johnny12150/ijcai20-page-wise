@@ -49,7 +49,8 @@ for i, data in tqdm(dblp.iterrows(), total=dblp.shape[0], position=0, leave=True
 
 
 # 使用set來取看會不會比較快
-# resultlist = list(set(resultlist))
+# resultlist = list(set(resultlist))  # 缺少考慮 node i to j is the same as node j to i
+# list(set([tuple(reversed(t)) for t in resultlist]))  # 直接inverse也會少考慮
 # 考慮node i & node j 的inverse的關係
 result = list(set([tuple(sorted(map(int, t))) for t in resultlist]))
 
