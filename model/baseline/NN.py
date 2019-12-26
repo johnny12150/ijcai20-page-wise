@@ -29,6 +29,9 @@ dblp_top50_conf = pd.read_pickle('preprocess/edge/paper_venue.pkl')
 pa = pd.read_pickle('preprocess/edge/p_a_before284_delete_author.pkl')
 pa_extra = pd.read_pickle('preprocess/edge/p_a_delete_author.pkl')
 pp = pd.read_pickle('preprocess/edge/paper_paper.pkl')
+pp['new_cited_papr_id'] = pp['new_cited_papr_id'].astype(int).astype(str)
+# todo 從pp整合出 ref list
+paper_refs = pp.groupby(['new_papr_id'])['new_cited_papr_id'].agg([','.join]).reset_index()
 
 # FIXME train的時候只考慮第一作者 ?
 # https://stackoverflow.com/questions/20067636/pandas-dataframe-get-first-row-of-each-group
@@ -39,16 +42,19 @@ dblp_top50_conf.dropna(subset=['new_first_aId'], inplace=True)  # 移除沒有�
 train2017 = dblp_top50_conf.loc[dblp_top50_conf.year < 284, ['new_papr_id', 'new_venue_id', 'new_first_aId', 'references']]
 test2018 = dblp_top50_conf.loc[dblp_top50_conf.year >= 284, ['new_papr_id', 'new_venue_id', 'new_first_aId', 'references']]
 
-# 塞入bert FIXME normalize
+# 塞入bert
 titles = pd.read_pickle('preprocess/edge/titles_bert.pkl')
 abstracts = pd.read_pickle('preprocess/edge/abstracts_bert.pkl')
 
-# deepwalk, FIXME 對column normalize
+# deepwalk,
 node_id = np.load('preprocess/edge/node_id.npy').astype(int)
 emb_2017 = np.load('preprocess/edge/deep_walk_vec.npy')
 # line embedding
 with open('preprocess/edge/line_1and2.pkl', 'rb') as file:
     line_emb = pickle.load(file)
+# graphsage
+g_id = np.load('preprocess/edge/id_map.npy', allow_pickle=True).item()  # 用npy轉dict
+g_vec = np.load('preprocess/edge/284.npy')
 
 # 檢查是否所有dblp的node都在embedding裡面
 # print(np.isin(train2017.new_papr_id.values, node_id).sum())
@@ -98,6 +104,11 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1)
                 emb_A = np.where(node_id == int(aId))[0][0]
                 emb = np.hstack(emb_data[[emb_v, emb_A], :])  # np style
                 emb = np.concatenate((emb, emb_t, emb_a), axis=None)
+            elif graph == 'GraphSAGE':
+                emb_p = emb_data[g_id[int(batch_i)]]
+                emb_v = emb_data[g_id[int(vId)]]
+                emb_A = emb_data[g_id[int(aId)]]
+                emb = np.concatenate((emb_v, emb_A, emb_t, emb_a), axis=None)
             batch_x += [emb]
             batch_y += [emb_p]
         batch_x = np.array(batch_x)
@@ -119,6 +130,7 @@ d2 = BatchNormalization()(d2)
 d3 = Dense(256, activation='tanh')(d2)
 out_emb = Dense(emb_dim, activation='linear')(d3)
 model = Model(input=all_in_one, output=out_emb)
+print(model.summary())
 
 # 最後一層用sigmoid/ linear輸出100個units, loss用mae硬做
 model.compile(optimizer='rmsprop', loss='mae')
@@ -126,18 +138,33 @@ model.compile(optimizer='rmsprop', loss='mae')
 
 batch = 128
 # 先用2018前全部 train推薦系統, 2019的test推薦效果
-train_history = model.fit_generator(embedding_loader(emb_2017, train2017.new_papr_id.values, 'DeepWalk', batch), epochs=10, steps_per_epoch=train2017.shape[0] / batch, verbose=2)
+train_history = model.fit_generator(embedding_loader(emb_2017, train2017.new_papr_id.values, 'GraphSAGE', batch), epochs=10, steps_per_epoch=train2017.shape[0] / batch, verbose=2)
 
 # train_history = model.fit_generator(embedding_loader(line_emb, train2017.new_papr_id.values), epochs=10, steps_per_epoch=train2017.shape[0] / batch, verbose=2)
 
 # save model
 model.save('model/hdf5/model_deepwalk.h5')
-model.save('model/hdf5/model_deepwalk_BN.h5')
+model.save('model/hdf5/model_gSAGE_BN.h5')
 
 # 查看weight
 print(len(model.layers))
 first_layer_weights = model.layers[1].get_weights()[0]  # d1的weight
 first_layer_bias = model.layers[1].get_weights()[1]
+
+
+# plot loss
+def show_train_history(train_history, train, validation=''):
+    plt.plot(train_history.history[train])
+    # plt.plot(train_history.history[validation])
+    plt.title('Train History')
+    plt.ylabel(train)
+    plt.xlabel('Epoch')
+    plt.legend()
+    # plt.legend(['train', 'validation'], loc='center right')
+    plt.show()
+
+
+show_train_history(train_history, 'loss')
 
 # FIXME testing的embedding還沒有答案
 test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values), steps=test2018.shape[0]/ batch)
@@ -151,7 +178,7 @@ sort_y = np.sort(shuffled_y, axis=None)
 x_all = x_all[sorter]  # 所有input
 paper_emb = paper_emb[sorter]  # 100維的paper_emb
 
-model = load_model('model/hdf5/model_deepwalk_BN.h5')
+model = load_model('model/hdf5/model_gSAGE_BN.h5')
 # 一次load全部data做predict
 predictions = model.predict(x_all, workers=4)  # 預測paper_emb
 np.save('model/baseline/tmp/embedding_predictions.npy', predictions)
@@ -159,7 +186,7 @@ np.save('model/baseline/tmp/embedding_predictions.npy', predictions)
 K = 150
 predictions = np.load('model/baseline/tmp/embedding_predictions.npy')
 # 找出跟NN predict出最相似的embedding當作要推薦cite的論文
-neigh = KNeighborsClassifier(n_neighbors=K, algorithm='ball_tree', n_jobs=4)  # algorithm='kd_tree', will use less memory
+neigh = KNeighborsClassifier(n_neighbors=1, algorithm='ball_tree', n_jobs=4)  # algorithm='kd_tree', will use less memory
 neigh.fit(paper_emb, sort_y)
 first_predictions = neigh.predict(predictions)  # 每row的預測ref的paper id
 k_predictions = neigh.kneighbors(X=predictions, n_neighbors=K, return_distance=False)
@@ -172,15 +199,7 @@ for row in k_predictions:
     i += 1
 
 
-# n_predictions = neigh.predict_proba(predictions)  # 透過機率找出最大的幾篇來推
-# sort_n = np.argsort(n_predictions)
-# for (x,y), value in np.ndenumerate(sort_n):
-#     # 每row依照其順序排列
-#     print(papers[value][:150])  # 推前150個接近
-#     break
-
-
-# 算MAP, FIXME 答案改成所有graph內node
+# 算MAP
 # ans = dblp_remain[dblp_remain.paper_id.isin(y)].sort_values(by=['paper_id']).reset_index(drop=True)
 ans = train2017.sort_values(by=['new_papr_id']).reset_index(drop=True)
 ansK = ans.references.apply(lambda x: list(map(comparison.get, list(map(int, ast.literal_eval(x)))))[:K]).values
