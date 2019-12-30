@@ -40,10 +40,14 @@ paper_refs = paper_refs[paper_refs.new_papr_id.isin(pp[pp.groupby(['new_papr_id'
 # https://stackoverflow.com/questions/20067636/pandas-dataframe-get-first-row-of-each-group
 dblp_top50_conf['new_first_aId'] = pa.groupby('new_papr_id').first()['new_author_id']  # 取每篇的第一作者
 dblp_top50_conf['references'] = dblp_top50[dblp_top50['new_papr_id'].isin(dblp_top50_conf['new_papr_id'].values)]['references']
-dblp_top50_conf.dropna(subset=['new_first_aId'], inplace=True)  # 移除沒有作者的paper
+# dblp_top50_conf.dropna(subset=['new_first_aId'], inplace=True)  # 移除沒有作者的paper
 # select 2018以前全部當train
-train2017 = dblp_top50_conf.loc[dblp_top50_conf.year < 284, ['new_papr_id', 'new_venue_id', 'new_first_aId', 'references']]
-test2018 = dblp_top50_conf.loc[dblp_top50_conf.year >= 284, ['new_papr_id', 'new_venue_id', 'new_first_aId', 'references']]
+train2017 = dblp_top50_conf.loc[dblp_top50_conf.time_step < 284, ['new_papr_id', 'new_venue_id', 'new_first_aId', 'references']]
+dblp_top50_test = dblp_top50_conf.copy()
+dblp_top50_test['new_first_aId'] = pa_extra.groupby('new_papr_id').first()['new_author_id']
+test2018 = dblp_top50_test.loc[dblp_top50_test.time_step == 284, ['new_papr_id', 'new_venue_id', 'new_first_aId', 'references']]
+# 可以被推薦的pool
+paper_pool = train2017.copy()
 
 # 塞入bert
 titles = pd.read_pickle('preprocess/edge/titles_bert.pkl')
@@ -60,9 +64,8 @@ emb_2017 = np.load('preprocess/edge/deep_walk_vec.npy')
 with open('preprocess/edge/line_1and2.pkl', 'rb') as file:
     line_emb = pickle.load(file)
 # graphsage
-g_id = np.load('preprocess/edge/id_map.npy', allow_pickle=True).item()  # 用npy轉dict
-g_vec = np.load('preprocess/edge/284.npy')
-# g_vec = preprocessing.scale(g_vec)
+with open('preprocess/edge/paper_embeddings.pkl', 'rb') as f:
+    sage_emb = pickle.load(f)
 
 # 檢查是否所有dblp的node都在embedding裡面
 # print(np.isin(train2017.new_papr_id.values, node_id).sum())
@@ -73,13 +76,16 @@ g_vec = np.load('preprocess/edge/284.npy')
 # 刪除沒有embedding的node當train
 train2017 = train2017.loc[train2017.new_first_aId.isin(node_id)]
 train2017 = train2017.loc[train2017.new_venue_id.isin(node_id)]
-train2017.dropna(subset=['references'], inplace=True)
+# train2017.dropna(subset=['references'], inplace=True)
+train2017.dropna(subset=['new_first_aId'], inplace=True)
 test2018 = test2018.loc[test2018.new_first_aId.isin(node_id)]
 test2018 = test2018.loc[test2018.new_venue_id.isin(node_id)]
+test2018.dropna(subset=['new_first_aId'], inplace=True)
+test2018.dropna(subset=['references'], inplace=True)
 
 
 # data generator
-def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1):
+def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1, all=1, test=False):
     """
     準備資料給模型
     :param emb_data:
@@ -91,8 +97,9 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1)
     while True:
         batch_x = []
         batch_y = []
+        emb_p = []
         batch_paths = np.random.choice(a=file_len, size=batch_size)
-        if not shuffle:
+        if all:
             np.random.shuffle(file_len)  # 確保不會像choice有重複取到的可能
             batch_paths = file_len
         for batch_i in batch_paths:
@@ -101,32 +108,38 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1)
             emb_t = titles[batch_i]
             emb_a = abstracts[batch_i]
             # 根據新paper id 找出 aId, vId
-            vId, aId = dblp_top50_conf.loc[batch_i, ['new_venue_id', 'new_first_aId']]
-            if graph == 'LINE':
-                # 找出該paper的所有資訊
-                emb_p = emb_data[str(batch_i)]  # paper emb
-                emb1 = emb_data[str(vId)]
-                emb2 = emb_data[str(int(aId))]
-                emb = np.concatenate((emb1, emb2, emb_t, emb_a), axis=None)
+            if not test:
+                vId, aId = dblp_top50_conf.loc[batch_i, ['new_venue_id', 'new_first_aId']]
+            else:
+                vId, aId = dblp_top50_test.loc[batch_i, ['new_venue_id', 'new_first_aId']]
+            if graph == 'LINE' or graph == 'GraphSAGE':
+                if not test:
+                    # 找出該paper的所有資訊
+                    emb_p = emb_data[str(batch_i)]  # paper emb
+                if shuffle:
+                    emb1 = emb_data[str(vId)]
+                    emb2 = emb_data[str(int(aId))]
+                    emb = np.concatenate((emb1, emb2, emb_t, emb_a), axis=None)
             elif graph == "DeepWalk":
-                emb_p = emb_data[np.where(node_id == batch_i)[0][0]]  # find node id 在emb_data的index
-                emb_v = np.where(node_id == int(vId))[0][0]
-                emb_A = np.where(node_id == int(aId))[0][0]
-                emb = np.hstack(emb_data[[emb_v, emb_A], :])  # np style
-                emb = np.concatenate((emb, emb_t, emb_a), axis=None)
-            elif graph == 'GraphSAGE':
-                emb_p = emb_data[g_id[int(batch_i)]]
-                emb_v = emb_data[g_id[int(vId)]]
-                emb_A = emb_data[g_id[int(aId)]]
-                emb = np.concatenate((emb_v, emb_A, emb_t, emb_a), axis=None)
-            batch_x += [emb]
+                if not test:
+                    emb_p = emb_data[np.where(node_id == batch_i)[0][0]]  # find node id 在emb_data的index
+                if shuffle:
+                    emb_v = np.where(node_id == int(vId))[0][0]
+                    emb_A = np.where(node_id == int(aId))[0][0]
+                    emb = np.hstack(emb_data[[emb_v, emb_A], :])  # np style
+                    emb = np.concatenate((emb, emb_t, emb_a), axis=None)
+            if shuffle:
+                batch_x += [emb]
             batch_y += [emb_p]
         batch_x = np.array(batch_x)
         batch_y = np.array(batch_y)
-        if shuffle:
-            yield batch_x, batch_y
-        else:
-            yield batch_x, batch_paths, batch_y
+        yield batch_x, batch_paths, batch_y
+
+
+x_train, _, paper_emb_train = next(embedding_loader(sage_emb, train2017.new_papr_id.values, 'GraphSAGE', train2017.shape[0]))
+_, y_all, paper_emb_all = next(embedding_loader(sage_emb, paper_pool.new_papr_id.values, 'GraphSAGE', paper_pool.shape[0], shuffle=0))
+# x_train, y_train, paper_emb_train = next(embedding_loader(emb_2017, train2017.new_papr_id.values, 'DeepWalk', train2017.shape[0], 0))
+# _, y_all, paper_emb_all = next(embedding_loader(emb_2017, paper_pool.new_papr_id.values, 'DeepWalk', paper_pool.shape[0], shuffle=0))
 
 
 # https://stackoverflow.com/questions/41888085/how-to-implement-word2vec-cbow-in-keras-with-shared-embedding-layer-and-negative
@@ -145,20 +158,18 @@ model = Model(input=all_in_one, output=out_emb)
 print(model.summary())
 
 # 最後一層用sigmoid/ linear輸出100個units, loss用mae硬做
-# model.compile(optimizer='adam', loss='mae')
-model.compile(optimizer='adam', loss='mae')
+# todo 改成dot類的
+model.compile(optimizer='adam', loss='cosine_proximity')
 # plot_model(model, to_file='pics/model_LINE.png', show_shapes=True)
 
 batch = 1024
-# x_all, y_all, paper_emb_all = next(embedding_loader(g_vec, train2017.new_papr_id.values, 'GraphSAGE', train2017.shape[0], 0))
-x_all, y_all, paper_emb_all = next(embedding_loader(emb_2017, train2017.new_papr_id.values, 'DeepWalk', train2017.shape[0], 0))
-train_history = model.fit(x_all, paper_emb_all, batch_size=batch, epochs=50, verbose=2)
+train_history = model.fit(x_train, paper_emb_train, batch_size=batch, epochs=50, verbose=2)
 # 先用2018前全部 train推薦系統, 2019的test推薦效果
 # train_history = model.fit_generator(embedding_loader(emb_2017, train2017.new_papr_id.values, 'GraphSAGE', batch), epochs=20, steps_per_epoch=train2017.shape[0] / batch, verbose=2)
 
 # save model
 # model.save('model/hdf5/model_deepwalk_BN.h5')
-# model.save('model/hdf5/model_gSAGE_BN.h5')
+model.save('model/hdf5/model_gSAGE_BN.h5')
 
 # 查看weight
 print(len(model.layers))
@@ -181,26 +192,27 @@ def show_train_history(train_history, train, validation=''):
 show_train_history(train_history, 'loss')
 
 # FIXME testing的embedding還沒有答案
-test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values), steps=test2018.shape[0]/ batch)
+test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values, all=0), steps=test2018.shape[0]/ batch)
 
 
 # 以pp裡面的ref為準看MAP
-y = train2017[train2017.new_papr_id.isin(paper_refs['new_papr_id'].values)].new_papr_id.values
-# y = train2017.new_papr_id.values  # 產生 X為embedding, y為id的pair
-# x_all, shuffled_y, paper_emb = next(embedding_loader(g_vec, y, 'GraphSAGE', y.shape[0], 0))  # 裡面會shuffle過
-x_all, shuffled_y, paper_emb = next(embedding_loader(emb_2017, y, 'DeepWalk', y.shape[0], 0))
+# y = train2017[train2017.new_papr_id.isin(paper_refs['new_papr_id'].values)].new_papr_id.values
+y = test2018.new_papr_id.values
+x_all, shuffled_y, paper_emb = next(embedding_loader(sage_emb, y, 'GraphSAGE', y.shape[0], test=True))  # 裡面會shuffle過
+# x_all, shuffled_y, paper_emb = next(embedding_loader(emb_2017, y, 'DeepWalk', y.shape[0]))
 sorter = shuffled_y.argsort()
 # sort_y = np.sort(shuffled_y, axis=None)
 sort_y = shuffled_y[sorter]
 x_all = x_all[sorter]  # 所有input
 paper_emb = paper_emb[sorter]  # 100維的paper_emb
+K = 150
+
 
 model = load_model('model/hdf5/model_gSAGE_BN.h5')
 # 一次load全部data做predict
 predictions = model.predict(x_all, workers=4)  # 預測paper_emb
-# np.save('model/baseline/tmp/embedding_predictions.npy', predictions)
+np.save('model/baseline/tmp/embedding_predictions.npy', predictions)
 
-K = 150
 # predictions = np.load('model/baseline/tmp/embedding_predictions.npy')
 # 找出跟NN predict出最相似的embedding當作要推薦cite的論文
 neigh = KNeighborsClassifier(n_neighbors=1, algorithm='ball_tree', n_jobs=4)  # algorithm='kd_tree', will use less memory
@@ -208,7 +220,7 @@ neigh.fit(paper_emb_all, y_all)
 papers = neigh.classes_  # 找出index所代表的paper_id
 # first_predictions = neigh.predict(predictions)  # 每row的預測ref的paper id
 
-# 看embedding答案的效果 FIXME 效果也不好
+# 看embedding答案的效果
 k_predictions = neigh.kneighbors(X=paper_emb, n_neighbors=K, return_distance=False)
 # k_predictions = neigh.kneighbors(X=predictions, n_neighbors=K, return_distance=False)
 recommend_papers = np.zeros((k_predictions.shape[0], k_predictions.shape[1]))
@@ -225,13 +237,18 @@ def dot():
         # scores = np.dot(paper_emb_all, predictions[i])
         scores = np.dot(paper_emb_all, paper_emb[i].T)  # reproduce graph embedding效果
         # 應該要排除自己(score最大者), 會和自己最像
-        recommend[i] = y_all[np.argsort(-scores)][1:K+1]  # descending
+        recommend[i] = y_all[np.argsort(scores)[::-1]][1:K+1]  # descending
     return recommend
 
-recommend_papers = dot()
-graph_scores = np.dot(paper_emb_all, paper_emb.T)  # this one is way faster
-graph_recommend_papers = y_all[np.argsort(-graph_scores)][1:K+1]
+# recommend_papers = dot()
+
+graph_scores = np.dot(paper_emb_all, paper_emb.T)
+graph_recommend_papers = y_all[np.argsort(graph_scores, axis=0)[::-1]][1:K+1]
+scores = np.dot(paper_emb_all, predictions.T)
+recommend_papers = y_all[np.argsort(scores, axis=0)[::-1]][:K]
+# recommend_papers = y_all[np.argsort(scores, axis=0)[::-1]][1:K+1]
 print(len(np.equal(recommend_papers, graph_recommend_papers.T)))
+
 
 # 算MAP
 # ans = train2017.sort_values(by=['new_papr_id']).reset_index(drop=True)
@@ -243,7 +260,11 @@ print(len(np.equal(recommend_papers, graph_recommend_papers.T)))
 # ansTK = ansT.references.apply(lambda x: list(filter(None.__ne__, list(map(comparison.get, map(int, ast.literal_eval(x)))))))  # 確認pp內的reference結果為正確的
 ans = paper_refs[paper_refs.new_papr_id.isin(train2017['new_papr_id'].values)]  # pp資料的答案
 ansK = ans['join'].apply(lambda x: list(map(int, x.split(','))))
-print(metrics.mapk(ansK.tolist(), recommend_papers.tolist(), K))
+print(metrics.mapk(ansK.tolist(), graph_recommend_papers.T.tolist(), K))
+
+test_ans = test2018.sort_values(by=['new_papr_id']).reset_index(drop=True)
+test_ansK = test_ans.references.apply(lambda x: list(filter(None.__ne__, list(map(comparison.get, map(int, ast.literal_eval(x)))))))
+print(metrics.mapk(test_ansK.tolist(), recommend_papers.T.tolist(), K))
 
 # 產生hot
 all_refs = []
@@ -253,9 +274,20 @@ all_refs = Counter(all_refs)
 # hot_1 = all_refs.most_common(1)[0][0]
 hot = [m[0] for m in all_refs.most_common(K)]
 
+paper284_ids = np.append(train2017.new_papr_id.values, test2018.new_papr_id.values)
+hot284 = dblp_remain[dblp_remain['paper_id'].isin(paper284_ids)].paper_references
+test_refs = []
+for i, data in hot284.iteritems():
+    test_refs.extend(data)
+test_refs = Counter(test_refs)
+test_hot = [m[0] for m in test_refs.most_common(K)]
+# test hot
+print(metrics.mapk(test_ansK.tolist(), np.array([test_hot]*test_ansK.shape[0]).tolist(), K))
+
+
 plt.bar('Hot', metrics.mapk(ansK.tolist(), np.array([hot]*ansK.shape[0]).tolist(), K))
-plt.bar('RS', metrics.mapk(ansK.tolist(), recommend_papers.tolist(), K))
-plt.bar('GR', metrics.mapk(ansK.tolist(), graph_recommend_papers.tolist(), K))
+plt.bar('RS', metrics.mapk(ansK.tolist(), recommend_papers.T.tolist(), K))
+plt.bar('GR', metrics.mapk(ansK.tolist(), graph_recommend_papers.T.tolist(), K))
 plt.ylabel('score')
 plt.title('train MAP@'+str(K))
 plt.show()
