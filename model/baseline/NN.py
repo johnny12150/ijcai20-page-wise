@@ -189,44 +189,75 @@ show_train_history(train_history, 'loss')
 test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values, all=0), steps=test2018.shape[0]/ batch)
 
 
-# 以pp裡面的ref為準看MAP
-y = train2017[train2017.new_papr_id.isin(paper_refs['new_papr_id'].values)].new_papr_id.values
-# y = test2018.new_papr_id.values  # testing
-# x_all, shuffled_y, paper_emb = next(embedding_loader(sage_emb, y, 'GraphSAGE', y.shape[0], test=True))  # testing
-x_all, shuffled_y, paper_emb = next(embedding_loader(sage_emb, y, 'GraphSAGE', y.shape[0]))  # 裡面會shuffle過
-# x_all, shuffled_y, paper_emb = next(embedding_loader(emb_2017, y, 'DeepWalk', y.shape[0]))
-sorter = shuffled_y.argsort()
-sort_y = shuffled_y[sorter]
-x_all = x_all[sorter]  # 所有input
-paper_emb = paper_emb[sorter]  # 100維的paper_emb
+def prepare_data(t='train', emb='GraphSAGE', save=False, load=False):
+    if t == 'train':
+        y = train2017[train2017.new_papr_id.isin(paper_refs['new_papr_id'].values)].new_papr_id.values
+        if emb == 'deepwalk':
+            x_all, shuffled_y, paper_emb = next(embedding_loader(emb_2017, y, 'DeepWalk', y.shape[0]))
+        elif emb == 'GraphSAGE':
+            x_all, shuffled_y, paper_emb = next(embedding_loader(sage_emb, y, 'GraphSAGE', y.shape[0]))  # 裡面會shuffle過
+    elif t == 'test':
+        y = test2018.new_papr_id.values  # testing
+        if emb == 'deepwalk':
+            x_all, shuffled_y, paper_emb = next(embedding_loader(emb_2017, y, 'DeepWalk', y.shape[0], test=True))
+        elif emb == 'GraphSAGE':
+            x_all, shuffled_y, paper_emb = next(embedding_loader(sage_emb, y, 'GraphSAGE', y.shape[0], test=True))  # testing
+
+    sorter = shuffled_y.argsort()
+    sort_y = shuffled_y[sorter]
+    x_all = x_all[sorter]  # 所有input
+    paper_emb = paper_emb[sorter]  # 100維的paper_emb
+    if emb == 'GraphSAGE':
+        model = load_model('model/hdf5/model_gSAGE_BN.h5')
+    # 一次load全部data做predict
+    predictions = model.predict(x_all, workers=4)  # 預測paper_emb
+    if save:
+        np.save('model/baseline/tmp/embedding_predictions.npy', predictions)
+    if load:
+        predictions = np.load('model/baseline/tmp/embedding_predictions.npy')
+    # rec(paper_emb_all, y_all, predictions, t=t)
+    return sort_y, x_all, paper_emb, predictions
+
+
+# sort_y, x_all, paper_emb, predictions = prepare_data()  # train
+sort_y, x_all, paper_emb, predictions = prepare_data(t='test')
 K = 150
 
 
-model = load_model('model/hdf5/model_gSAGE_BN.h5')
-# 一次load全部data做predict
-predictions = model.predict(x_all, workers=4)  # 預測paper_emb
-np.save('model/baseline/tmp/embedding_predictions.npy', predictions)
-# predictions = np.load('model/baseline/tmp/embedding_predictions.npy')
-# 找出跟NN predict出最相似的embedding當作要推薦cite的論文
-neigh = KNeighborsClassifier(n_neighbors=1, algorithm='ball_tree', n_jobs=4)  # algorithm='kd_tree', will use less memory
-neigh.fit(paper_emb_all, y_all)
-papers = neigh.classes_  # 找出index所代表的paper_id
+def rec(all, targets, pred, t='train', emb='GraphSAGE'):
+    if emb == 'GraphSAGE':
+        scores = np.dot(all, pred.T)
+        recommend_papers = targets[np.argsort(scores, axis=0)[::-1]][1:K + 1]
+        if t == 'train':  # Graph自身的推薦能力
+            graph_scores = np.dot(paper_emb_all, paper_emb.T)
+            graph_recommend_papers = y_all[np.argsort(graph_scores, axis=0)[::-1]][1:K + 1]
+            return recommend_papers, graph_recommend_papers
 
-# 看embedding答案的效果
-k_predictions_graph = neigh.kneighbors(X=paper_emb, n_neighbors=K, return_distance=False)
-k_predictions = neigh.kneighbors(X=predictions, n_neighbors=K, return_distance=False)
-recommend_papers = np.zeros((k_predictions.shape[0], k_predictions.shape[1]))
-graph_recommend_papers = np.zeros((k_predictions.shape[0], k_predictions.shape[1]))
-i = 0
-for row in k_predictions_graph:
-    graph_recommend_papers[i] = papers[row]  # 從KNN index轉成paper_id
-    i += 1
-i = 0
-for row in k_predictions:
-    recommend_papers[i] = papers[row]  # 從KNN index轉成paper_id
-    i += 1
+    return recommend_papers
 
-# dot for graphSAGE
+
+def knn_rec():
+    # 找出跟NN predict出最相似的embedding當作要推薦cite的論文
+    neigh = KNeighborsClassifier(n_neighbors=1, algorithm='ball_tree', n_jobs=4)  # algorithm='kd_tree', will use less memory
+    neigh.fit(paper_emb_all, y_all)
+    papers = neigh.classes_  # 找出index所代表的paper_id
+
+    # 看embedding答案的效果
+    k_predictions_graph = neigh.kneighbors(X=paper_emb, n_neighbors=K, return_distance=False)
+    k_predictions = neigh.kneighbors(X=predictions, n_neighbors=K, return_distance=False)
+    recommend_papers = np.zeros((k_predictions.shape[0], k_predictions.shape[1]))
+    graph_recommend_papers = np.zeros((k_predictions.shape[0], k_predictions.shape[1]))
+    i = 0
+    for row in k_predictions_graph:
+        graph_recommend_papers[i] = papers[row]  # 從KNN index轉成paper_id
+        i += 1
+    i = 0
+    for row in k_predictions:
+        recommend_papers[i] = papers[row]  # 從KNN index轉成paper_id
+        i += 1
+
+
+# dot for graphSAGE FIXME 答案在testing上的成效未知
 graph_scores = np.dot(paper_emb_all, paper_emb.T)
 graph_recommend_papers = y_all[np.argsort(graph_scores, axis=0)[::-1]][1:K+1]
 scores = np.dot(paper_emb_all, predictions.T)
@@ -248,10 +279,10 @@ ans = paper_refs[paper_refs.new_papr_id.isin(train2017['new_papr_id'].values)]  
 ansK = ans['join'].apply(lambda x: list(map(int, x.split(','))))
 # print(metrics.mapk(ansK.tolist(), graph_recommend_papers.T.tolist(), K))
 
-# testing
+# testing 2018 AAAI
 test_ans = test2018.sort_values(by=['new_papr_id']).reset_index(drop=True)
 test_ansK = test_ans.references.apply(lambda x: list(filter(None.__ne__, list(map(comparison.get, map(int, ast.literal_eval(x)))))))
-print(metrics.mapk(test_ansK.tolist(), recommend_papers.T.tolist(), K))
+# print(metrics.mapk(test_ansK.tolist(), recommend_papers.T.tolist(), K))
 
 # 產生hot
 all_refs = []
@@ -330,16 +361,20 @@ def metric_bar(hot, ansK, method='MAP', t='train', kList=(25, 50, 100, 150)):
         if method == 'MAP':
             plt.bar('Hot', metrics.mapk(ansK.tolist(), np.array([hot]*ansK.shape[0]).tolist(), k))
             plt.bar('RS', metrics.mapk(ansK.tolist(), recommend_papers.T.tolist(), k))
-            plt.bar('GR', metrics.mapk(ansK.tolist(), graph_recommend_papers.T.tolist(), k))
+            if t == 'train':
+                plt.bar('GR', metrics.mapk(ansK.tolist(), graph_recommend_papers.T.tolist(), k))
         if method == 'Recall':
             plt.bar('Hot', mark(ansK.values, np.array([hot]*ansK.shape[0]), k))
             plt.bar('RS', mark(ansK.values, recommend_papers.T, k))
-            plt.bar('GR', mark(ansK.values, graph_recommend_papers.T, k))
+            if t == 'train':
+                plt.bar('GR', mark(ansK.values, graph_recommend_papers.T, k))
         plt.ylabel('score')
         plt.title(t+' '+method+'@'+str(k))
         plt.show()
 
 
 metric_bar(hot, ansK)  # train MAP
-metric_bar(test_hot, test_ansK, t='test')  # test MAP
+metric_bar(test_hot, test_ansK, t='test', kList=[150])  # test MAP
 metric_bar(hot, ansK, 'Recall')  # train Recall
+metric_bar(test_hot, test_ansK, 'Recall', t='test', kList=[25, 50])  # test recall
+
