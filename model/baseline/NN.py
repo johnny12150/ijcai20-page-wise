@@ -37,7 +37,7 @@ paper_refs = pp.groupby(['new_papr_id'])['new_cited_papr_id'].agg([','.join]).re
 # 挑出ref>20的index, 只用他們算MAP
 paper_refs = paper_refs[paper_refs.new_papr_id.isin(pp[pp.groupby(['new_papr_id'])['year'].transform('count') > 20].new_papr_id.value_counts().index.tolist())]
 
-# FIXME 一篇有多個作者時當多個training sample?
+# FIXME 一篇有多個作者時當多個training sample
 # https://stackoverflow.com/questions/20067636/pandas-dataframe-get-first-row-of-each-group
 dblp_top50_conf['new_first_aId'] = pa.groupby('new_papr_id').first()['new_author_id']  # 取每篇的第一作者
 dblp_top50_conf['references'] = dblp_top50[dblp_top50['new_papr_id'].isin(dblp_top50_conf['new_papr_id'].values)]['references']
@@ -46,8 +46,6 @@ train2017 = dblp_top50_conf.loc[dblp_top50_conf.time_step < 284, ['new_papr_id',
 dblp_top50_test = dblp_top50_conf.copy()
 dblp_top50_test['new_first_aId'] = pa_extra.groupby('new_papr_id').first()['new_author_id']  # 移除沒有作者的paper
 test2018 = dblp_top50_test.loc[dblp_top50_test.time_step == 284, ['new_papr_id', 'new_venue_id', 'new_first_aId', 'references']]
-# 可以被推薦的pool
-paper_pool = train2017.copy()
 
 # 塞入bert
 titles = pd.read_pickle('preprocess/edge/titles_bert.pkl')
@@ -84,6 +82,33 @@ test2018 = test2018.loc[test2018.new_first_aId.isin(node_id)]
 test2018 = test2018.loc[test2018.new_venue_id.isin(node_id)]
 test2018.dropna(subset=['new_first_aId'], inplace=True)
 test2018.dropna(subset=['references'], inplace=True)
+
+
+def generate_hot(data, k=150, threshlod=10):
+    """
+    find popular cited paper
+    @param data: paper_id (Series)
+    @param k: default 150
+    @param threshlod: at least how many references
+    @return:
+    """
+    all_refs = []  # 計算每篇被reference到幾次
+    for i, data in data.iteritems():
+        all_refs.extend(data)
+    all_refs = Counter(all_refs)
+    # hot_1 = all_refs.most_common(1)[0][0]
+    hotK = [m[0] for m in all_refs.most_common(k)]
+    candidate = [m[0] for m in all_refs.most_common() if m[1] >= threshlod]
+    return hotK, candidate
+
+
+# 產生hot
+hot, recPool = generate_hot(dblp_remain.paper_references, threshlod=20)
+
+# testing hot
+paper284_ids = np.append(train2017.new_papr_id.values, test2018.new_papr_id.values)
+hot284 = dblp_remain[dblp_remain['paper_id'].isin(paper284_ids)].paper_references
+test_hot, testPool = generate_hot(hot284)
 
 
 # data generator
@@ -133,42 +158,56 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1,
         yield batch_x, batch_paths, batch_y
 
 
-x_train, _, paper_emb_train = next(embedding_loader(sage_emb, train2017.new_papr_id.values, 'GraphSAGE', train2017.shape[0]))
-_, y_all, paper_emb_all = next(embedding_loader(sage_emb, paper_pool.new_papr_id.values, 'GraphSAGE', paper_pool.shape[0], shuffle=0))
+def data_generator(emb, pIds, pool, method):
+    x_train, _, paper_emb_train = next(embedding_loader(emb, pIds, method, pIds.shape[0]))
+    _, y_all, paper_emb_all = next(embedding_loader(emb, pool, method, pool.shape[0], shuffle=0))
+    return x_train, paper_emb_train, y_all, paper_emb_all
+
+
+paper_pool = train2017[train2017.new_papr_id.isin(recPool)]
+x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2017.new_papr_id.values, paper_pool.new_papr_id.values, 'GraphSAGE')
+# x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2017.new_papr_id.values, paper_pool.new_papr_id.values, 'DeepWalk')
+
+# x_train, _, paper_emb_train = next(embedding_loader(sage_emb, train2017.new_papr_id.values, 'GraphSAGE', train2017.shape[0]))
+# _, y_all, paper_emb_all = next(embedding_loader(sage_emb, paper_pool.new_papr_id.values, 'GraphSAGE', paper_pool.shape[0], shuffle=0))
 # x_train, _, paper_emb_train = next(embedding_loader(emb_2017, train2017.new_papr_id.values, 'DeepWalk', train2017.shape[0]))
 # _, y_all, paper_emb_all = next(embedding_loader(emb_2017, paper_pool.new_papr_id.values, 'DeepWalk', paper_pool.shape[0], shuffle=0))
 
 
-# https://stackoverflow.com/questions/41888085/how-to-implement-word2vec-cbow-in-keras-with-shared-embedding-layer-and-negative
-# 用一個network去逼近embedding
-# all_in_one = Input(shape=(emb_dim*2+bert_title+bert_abstract,))
-all_in_one = Input(shape=(emb_dim*2,))
-BN = BatchNormalization()(all_in_one)
-d1 = Dense(1000, activation='tanh')(BN)
-# d1 = BatchNormalization()(d1)
-d2 = Dense(512, activation='tanh')(d1)
-# d2 = BatchNormalization()(d2)
-d3 = Dense(256, activation='tanh')(d2)
-d4 = Dense(200, activation='tanh')(d3)
-d5 = Dense(128, activation='tanh')(d4)
-out_emb = Dense(emb_dim, activation='linear')(d5)
-model = Model(input=all_in_one, output=out_emb)
-print(model.summary())
+def train_model(x, y, batch=1024, save=False):
+    # https://stackoverflow.com/questions/41888085/how-to-implement-word2vec-cbow-in-keras-with-shared-embedding-layer-and-negative
+    # 用一個network去逼近embedding
+    # all_in_one = Input(shape=(emb_dim*2+bert_title+bert_abstract,))
+    all_in_one = Input(shape=(emb_dim*2,))
+    BN = BatchNormalization()(all_in_one)
+    d1 = Dense(1000, activation='tanh')(BN)
+    # d1 = BatchNormalization()(d1)
+    d2 = Dense(512, activation='tanh')(d1)
+    # d2 = BatchNormalization()(d2)
+    d3 = Dense(256, activation='tanh')(d2)
+    d4 = Dense(200, activation='tanh')(d3)
+    d5 = Dense(128, activation='tanh')(d4)
+    out_emb = Dense(emb_dim, activation='linear')(d5)
+    model = Model(input=all_in_one, output=out_emb)
+    print(model.summary())
 
-model.compile(optimizer='adam', loss='cosine_proximity')
-# plot_model(model, to_file='pics/model_LINE.png', show_shapes=True)
+    model.compile(optimizer='adam', loss='cosine_proximity')
+    # plot_model(model, to_file='pics/model_LINE.png', show_shapes=True)
 
-batch = 1024
-train_history = model.fit(x_train, paper_emb_train, batch_size=batch, epochs=50, verbose=2)
+    train_history = model.fit(x, y, batch_size=batch, epochs=50, verbose=2)
 
-# save model
-model.save('model/hdf5/model_deepwalk_BN.h5')
-# model.save('model/hdf5/model_gSAGE_BN.h5')
+    if save:
+        # save model
+        model.save('model/hdf5/model_deepwalk_BN.h5')
+        # model.save('model/hdf5/model_gSAGE_BN.h5')
+    return model, train_history
 
-# 查看weight
-print(len(model.layers))
-first_layer_weights = model.layers[1].get_weights()[0]  # d1的weight
-first_layer_bias = model.layers[1].get_weights()[1]
+
+def check_model_weight(model):
+    # 查看weight
+    print(len(model.layers))
+    first_layer_weights = model.layers[1].get_weights()[0]  # d1的weight
+    first_layer_bias = model.layers[1].get_weights()[1]
 
 
 # plot loss
@@ -183,9 +222,11 @@ def show_train_history(train_history, train, validation=''):
     plt.show()
 
 
+model, train_history = train_model(x_train, paper_emb_train)
 show_train_history(train_history, 'loss')
 
 # FIXME testing的embedding還沒有答案
+batch = 1024
 test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values, all=0), steps=test2018.shape[0]/ batch)
 
 
@@ -258,8 +299,9 @@ def knn_rec():
 
 
 # dot for graphSAGE FIXME 答案在testing上的成效未知
-graph_scores = np.dot(paper_emb_all, paper_emb.T)
+graph_scores = np.dot(paper_emb_all, paper_emb.T)  # train only
 graph_recommend_papers = y_all[np.argsort(graph_scores, axis=0)[::-1]][1:K+1]
+
 scores = np.dot(paper_emb_all, predictions.T)
 recommend_papers = y_all[np.argsort(scores, axis=0)[::-1]][1:K+1]
 
@@ -269,37 +311,27 @@ graph_recommend_papers = y_all[np.argsort(cos_graph, axis=0)[::-1]][1:K+1]
 cos = np.dot(paper_emb_all, predictions.T)
 recommend_papers = y_all[np.argsort(cos, axis=0)[::-1]][:K]
 
-# 算MAP
-# ans = train2017.sort_values(by=['new_papr_id']).reset_index(drop=True)
-# ansK = ans.references.apply(lambda x: list(filter(None.__ne__, list(map(comparison.get, map(int, ast.literal_eval(x)))))))
-# ansK = ans.paper_references.apply(lambda x: x[:K]).values
-# print(metrics.mapk(ans1.reshape((-1, 1)).tolist(), first_predictions.reshape((-1, 1)).tolist(), 1))
 
-ans = paper_refs[paper_refs.new_papr_id.isin(train2017['new_papr_id'].values)]  # pp資料的答案
-ansK = ans['join'].apply(lambda x: list(map(int, x.split(','))))
+def generate_ans(data, t='train'):
+    if t == 'train':
+        ans = paper_refs[paper_refs.new_papr_id.isin(data['new_papr_id'].values)].apply(lambda x: list(map(int, x.split(','))))
+    else:
+        test_ans = data.sort_values(by=['new_papr_id']).reset_index(drop=True)
+        ans = test_ans.references.apply(lambda x: list(filter(None.__ne__, list(map(comparison.get, map(int, ast.literal_eval(x)))))))
+    return ans
+
+
+# ans = paper_refs[paper_refs.new_papr_id.isin(train2017['new_papr_id'].values)]  # pp資料的答案
+# ansK = ans['join'].apply(lambda x: list(map(int, x.split(','))))
+ansK = generate_ans(train2017)
 # print(metrics.mapk(ansK.tolist(), graph_recommend_papers.T.tolist(), K))
 
 # testing 2018 AAAI
-test_ans = test2018.sort_values(by=['new_papr_id']).reset_index(drop=True)
-test_ansK = test_ans.references.apply(lambda x: list(filter(None.__ne__, list(map(comparison.get, map(int, ast.literal_eval(x)))))))
+# test_ans = test2018.sort_values(by=['new_papr_id']).reset_index(drop=True)
+# test_ansK = test_ans.references.apply(lambda x: list(filter(None.__ne__, list(map(comparison.get, map(int, ast.literal_eval(x)))))))
+test_ansK = generate_ans(test2018, t='test')
 # print(metrics.mapk(test_ansK.tolist(), recommend_papers.T.tolist(), K))
 
-# 產生hot
-all_refs = []
-for i, data in dblp_remain.paper_references.iteritems():
-    all_refs.extend(data)
-all_refs = Counter(all_refs)
-# hot_1 = all_refs.most_common(1)[0][0]
-hot = [m[0] for m in all_refs.most_common(K)]
-
-# testing hot
-paper284_ids = np.append(train2017.new_papr_id.values, test2018.new_papr_id.values)
-hot284 = dblp_remain[dblp_remain['paper_id'].isin(paper284_ids)].paper_references
-test_refs = []
-for i, data in hot284.iteritems():
-    test_refs.extend(data)
-test_refs = Counter(test_refs)
-test_hot = [m[0] for m in test_refs.most_common(K)]
 # test hot
 # print(metrics.mapk(test_ansK.tolist(), np.array([test_hot]*test_ansK.shape[0]).tolist(), K))
 
