@@ -81,7 +81,7 @@ with open('preprocess/edge/paper_embeddings.pkl', 'rb') as f:
 # print(np.isin(pa.new_author_id.value_counts().index.values, node_id).sum())
 # print(np.isin(dblp_top50_conf.new_venue_id.value_counts().index.values, node_id).sum())
 
-# 刪除沒有embedding的node當train
+# 刪除沒有embedding的node當train fixme 改從dict的 keys查
 train2017 = train2017.loc[train2017.new_first_aId.isin(node_id)]
 train2017 = train2017.loc[train2017.new_venue_id.isin(node_id)]
 # train2017.dropna(subset=['references'], inplace=True)
@@ -139,26 +139,30 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1,
             np.random.shuffle(file_len)  # 確保不會像choice有重複取到的可能
             batch_paths = file_len
         for batch_i in batch_paths:
-            # emb_t = titles.iloc[batch_i]  # 找該paper的title, abstract
-            # emb_a = abstracts.iloc[batch_i]
+            # 找該paper的title, abstract
             emb_t = titles[batch_i]
             emb_a = abstracts[batch_i]
             # 根據新paper id 找出 aId, vId
             if not test:
-                vId, aId = dblp_top50_conf.loc[batch_i, ['new_venue_id', 'new_first_aId']]
+                Ids = dblp_top50_conf.loc[dblp_top50_conf['new_papr_id'] == batch_i, ['new_venue_id', 'new_first_aId']].values
             else:
-                vId, aId = dblp_top50_test.loc[batch_i, ['new_venue_id', 'new_first_aId']]
-            if graph == 'LINE' or graph == 'GraphSAGE' or graph == "DeepWalk":
-                if not test:
-                    # 找出該paper的所有資訊
-                    emb_p = emb_data[str(batch_i)]  # paper emb
+                Ids = dblp_top50_test.loc[dblp_top50_test['new_papr_id'] == batch_i, ['new_venue_id', 'new_first_aId']].values
+
+            vId = Ids[:, 0]
+            aId = Ids[:, 1]
+            for i in range(Ids.shape[0]):
+                if graph == 'LINE' or graph == 'GraphSAGE' or graph == "DeepWalk":
+                    if not test:
+                        # 找出該paper的所有資訊
+                        emb_p = emb_data[str(batch_i)]  # paper emb
+                    if shuffle:
+                        emb1 = emb_data[str(vId[i])]
+                        emb2 = emb_data[str(int(aId[i]))]
+                        emb = np.concatenate((emb1, emb2, emb_t, emb_a), axis=None)
                 if shuffle:
-                    emb1 = emb_data[str(vId)]
-                    emb2 = emb_data[str(int(aId))]
-                    emb = np.concatenate((emb1, emb2, emb_t, emb_a), axis=None)
-            if shuffle:
-                batch_x += [emb]
-            batch_y += [emb_p]
+                    batch_x += [emb]
+                batch_y += [emb_p]
+
         batch_x = np.array(batch_x)
         batch_y = np.array(batch_y)
         yield batch_x, batch_paths, batch_y
@@ -171,7 +175,7 @@ def data_generator(emb, pIds, pool, method):
 
 
 paper_pool = train2017[train2017.new_papr_id.isin(recPool)]
-x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2017.new_papr_id.values, paper_pool.new_papr_id.values, 'GraphSAGE')
+x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, np.unique(train2017.new_papr_id.values), np.unique(paper_pool.new_papr_id.values), 'GraphSAGE')
 # x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2017.new_papr_id.values, paper_pool.new_papr_id.values, 'DeepWalk')
 
 # x_train, _, paper_emb_train = next(embedding_loader(sage_emb, train2017.new_papr_id.values, 'GraphSAGE', train2017.shape[0]))
@@ -237,13 +241,13 @@ test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_
 
 def prepare_data(t='train', emb='GraphSAGE', save=False, load=False):
     if t == 'train':
-        y = train2017[train2017.new_papr_id.isin(paper_refs['new_papr_id'].values)].new_papr_id.values
+        y = np.unique(train2017[train2017.new_papr_id.isin(paper_refs['new_papr_id'].values)].new_papr_id.values)
         if emb == 'deepwalk':
             x_all, shuffled_y, paper_emb = next(embedding_loader(emb_2017, y, 'DeepWalk', y.shape[0]))
         elif emb == 'GraphSAGE':
             x_all, shuffled_y, paper_emb = next(embedding_loader(sage_emb, y, 'GraphSAGE', y.shape[0]))  # 裡面會shuffle過
     elif t == 'test':
-        y = test2018.new_papr_id.values  # testing
+        y = np.unique(test2018.new_papr_id.values)  # testing
         if emb == 'deepwalk':
             x_all, shuffled_y, paper_emb = next(embedding_loader(emb_2017, y, 'DeepWalk', y.shape[0], test=True))
         elif emb == 'GraphSAGE':
