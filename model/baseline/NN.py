@@ -28,6 +28,7 @@ dblp_remain['paper_id'] = dblp_remain.paper_id.map(comparison)  # 將舊id換成
 dblp_remain['paper_references'] = dblp_remain.paper_references.apply(lambda x: list(map(comparison.get, list(map(int, ast.literal_eval(x))))))
 remain_paper = dblp_top50.loc[(dblp_top50.new_papr_id.isin(dblp_remain.paper_id.values)) & (dblp_top50.time_step < 284)].new_papr_id.values  # 2018AAAI以前
 dblp_top50_conf = pd.read_pickle('preprocess/edge/paper_venue.pkl')
+dblp_top50_test = dblp_top50_conf.copy()
 pa = pd.read_pickle('preprocess/edge/p_a_before284_delete_author.pkl')
 pa_extra = pd.read_pickle('preprocess/edge/p_a_delete_author.pkl')
 pp = pd.read_pickle('preprocess/edge/paper_paper.pkl')
@@ -37,14 +38,21 @@ paper_refs = pp.groupby(['new_papr_id'])['new_cited_papr_id'].agg([','.join]).re
 # 挑出ref>20的index, 只用他們算MAP
 paper_refs = paper_refs[paper_refs.new_papr_id.isin(pp[pp.groupby(['new_papr_id'])['year'].transform('count') > 20].new_papr_id.value_counts().index.tolist())]
 
-# FIXME 一篇有多個作者時當多個training sample
 # https://stackoverflow.com/questions/20067636/pandas-dataframe-get-first-row-of-each-group
-dblp_top50_conf['new_first_aId'] = pa.groupby('new_papr_id').first()['new_author_id']  # 取每篇的第一作者
+# dblp_top50_conf['new_first_aId'] = pa.groupby('new_papr_id').first()['new_author_id']  # 取每篇的第一作者
+dblp_top50_conf['authors'] = pa.groupby('new_papr_id')['new_author_id'].apply(list)  # groupby element to list
 dblp_top50_conf['references'] = dblp_top50[dblp_top50['new_papr_id'].isin(dblp_top50_conf['new_papr_id'].values)]['references']
+dblp_top50_conf.dropna(subset=['authors'], inplace=True)  # drop empty author papers
+# 根據author數量變成多筆training data
+dblp_top50_conf = pd.DataFrame([np.append(row.values, d) for _, row in dblp_top50_conf.iterrows() for d in row['authors']], columns=dblp_top50_conf.columns.append(pd.Index(['new_first_aId'])))
 # select 2018以前全部當train
 train2017 = dblp_top50_conf.loc[dblp_top50_conf.time_step < 284, ['new_papr_id', 'new_venue_id', 'new_first_aId', 'references']]
-dblp_top50_test = dblp_top50_conf.copy()
-dblp_top50_test['new_first_aId'] = pa_extra.groupby('new_papr_id').first()['new_author_id']  # 移除沒有作者的paper
+
+# dblp_top50_test['new_first_aId'] = pa_extra.groupby('new_papr_id').first()['new_author_id']  # 移除沒有作者的paper
+dblp_top50_test['authors'] = pa_extra.groupby('new_papr_id')['new_author_id'].apply(list)  # groupby element to list
+dblp_top50_test['references'] = dblp_top50[dblp_top50['new_papr_id'].isin(dblp_top50_test['new_papr_id'].values)]['references']
+dblp_top50_test.dropna(subset=['authors'], inplace=True)  # drop empty author papers
+dblp_top50_test = pd.DataFrame([np.append(row.values, d) for _, row in dblp_top50_test.iterrows() for d in row['authors']], columns=dblp_top50_test.columns.append(pd.Index(['new_first_aId'])))
 test2018 = dblp_top50_test.loc[dblp_top50_test.time_step == 284, ['new_papr_id', 'new_venue_id', 'new_first_aId', 'references']]
 
 # 塞入bert
@@ -103,7 +111,7 @@ def generate_hot(data, k=150, threshlod=10):
 
 
 # 產生hot
-hot, recPool = generate_hot(dblp_remain.paper_references, threshlod=20)
+hot, recPool = generate_hot(dblp_remain.paper_references, threshlod=5)
 
 # testing hot
 paper284_ids = np.append(train2017.new_papr_id.values, test2018.new_papr_id.values)
@@ -147,8 +155,6 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1,
                 if shuffle:
                     emb1 = emb_data[str(vId)]
                     emb2 = emb_data[str(int(aId))]
-                    # todo 只用BERT看看
-                    # emb = np.concatenate((emb_t, emb_a), axis=None)
                     emb = np.concatenate((emb1, emb2, emb_t, emb_a), axis=None)
             if shuffle:
                 batch_x += [emb]
@@ -177,8 +183,7 @@ x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2
 def train_model(x, y, batch=1024, save=False):
     # https://stackoverflow.com/questions/41888085/how-to-implement-word2vec-cbow-in-keras-with-shared-embedding-layer-and-negative
     # 用一個network去逼近embedding
-    # all_in_one = Input(shape=(emb_dim*2+bert_title+bert_abstract,))
-    all_in_one = Input(shape=(emb_dim*2,))
+    all_in_one = Input(shape=(emb_dim*2+bert_title+bert_abstract,))
     BN = BatchNormalization()(all_in_one)
     d1 = Dense(1000, activation='tanh')(BN)
     # d1 = BatchNormalization()(d1)
@@ -198,8 +203,8 @@ def train_model(x, y, batch=1024, save=False):
 
     if save:
         # save model
-        model.save('model/hdf5/model_deepwalk_BN.h5')
-        # model.save('model/hdf5/model_gSAGE_BN.h5')
+        # model.save('model/hdf5/model_deepwalk_BN.h5')
+        model.save('model/hdf5/model_gSAGE_BN.h5')
     return model, train_history
 
 
