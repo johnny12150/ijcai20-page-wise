@@ -77,16 +77,6 @@ with open('preprocess/edge/paper_embeddings.pkl', 'rb') as f:
 # 檢查是否所有dblp的node都在embedding裡面
 # print(np.isin(train2017.new_papr_id.values, np.fromiter(line_emb.keys(), dtype=int)).sum())
 
-# 刪除沒有embedding的node當train
-# node_id = np.array(list(sage_emb.keys()))
-# train2017 = train2017.loc[train2017.new_first_aId.isin(node_id)]
-# train2017 = train2017.loc[train2017.new_venue_id.isin(node_id)]
-# train2017.dropna(subset=['new_first_aId'], inplace=True)
-# test2018 = test2018.loc[test2018.new_first_aId.isin(node_id)]
-# test2018 = test2018.loc[test2018.new_venue_id.isin(node_id)]
-# test2018.dropna(subset=['new_first_aId'], inplace=True)
-# test2018.dropna(subset=['references'], inplace=True)
-
 
 def generate_hot(data, k=150, threshlod=10):
     """
@@ -148,7 +138,7 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1,
             # 找該paper的title, abstract
             emb_t = titles[batch_i]
             emb_a = abstracts[batch_i]
-            # 根據新paper id 找出 aId, vId fixme: data應該就包含這些資訊了
+            # 根據新paper id 找出 aId, vId
             if not test:
                 Ids = dblp_top50_conf.loc[dblp_top50_conf['new_papr_id'] == batch_i, ['new_venue_id', 'new_first_aId']].values
             else:
@@ -201,7 +191,7 @@ def data_generator(emb, pIds, pool, method, save=True, load=False):
 
 # first time generate data, may cause 1 hour
 paper_pool = train2017[train2017.new_papr_id.isin(recPool)]
-x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2017, paper_pool, 'GraphSAGE')
+# x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2017, paper_pool, 'GraphSAGE')
 # x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2017, paper_pool, 'DeepWalk')
 
 # load previous results
@@ -227,7 +217,7 @@ def train_model(x, y, batch=1024, save=False):
     model.compile(optimizer='adam', loss='cosine_proximity')
     # plot_model(model, to_file='pics/model_LINE.png', show_shapes=True)
 
-    train_history = model.fit(x, y, batch_size=batch, epochs=50, verbose=2)
+    train_history = model.fit(x, y, batch_size=batch, epochs=10, verbose=2, validation_split=0.33)
 
     if save:
         # save model
@@ -244,43 +234,49 @@ def check_model_weight(model):
 
 
 # plot loss
-def show_train_history(train_history, train, validation=''):
+def show_train_history(train_history, train, validation):
     plt.plot(train_history.history[train])
-    # plt.plot(train_history.history[validation])
+    plt.plot(train_history.history[validation])
     plt.title('Train History')
     plt.ylabel(train)
     plt.xlabel('Epoch')
     plt.legend()
-    # plt.legend(['train', 'validation'], loc='center right')
+    plt.legend(['train', 'validation'], loc='center right')
     plt.show()
 
 
 model, train_history = train_model(x_train, paper_emb_train)
-show_train_history(train_history, 'loss')
+show_train_history(train_history, 'loss', 'val_loss')
 
-# FIXME testing的embedding還沒有答案
+
 batch = 1024
-test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values, all=0), steps=test2018.shape[0]/ batch)
+# test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values, all=0), steps=test2018.shape[0]/ batch)
 
 
+# fixme np.unique 回傳的會由小排到大
 def rec(all, targets, pred, t='train', emb='GraphSAGE'):
+    indexes = np.unique(targets, return_index=True)[1]
+    targets = np.array([targets[index] for index in sorted(indexes)])
+
     if emb == 'GraphSAGE':
-        scores = np.dot(np.unique(all, axis=0), pred.T)
+        all = np.array([all[i] for i in sorted(np.unique(all, axis=0, return_index=True)[1])])
+        scores = np.dot(all, pred.T)
         recommend_papers = targets[np.argsort(scores, axis=0)[::-1]][1:K + 1]
         if t == 'train':  # Graph自身的推薦能力
-            graph_scores = np.dot(np.unique(all, axis=0), paper_emb.T)
+            graph_scores = np.dot(all, paper_emb.T)
             graph_recommend_papers = targets[np.argsort(graph_scores, axis=0)[::-1]][1:K + 1]
-            return recommend_papers, graph_recommend_papers
+            # return recommend_papers, graph_recommend_papers
     return recommend_papers
 
 
 def prepare_data(t='train', emb='GraphSAGE', save=True, load=False):
     if load:
         save = False
-        predictions = np.load('model/baseline/tmp/embedding_predictions.npy')
-        sort_y = np.load('model/baseline/tmp/sort_y.npy')
-        x_all = np.load('model/baseline/tmp/x_all.npy')
-        paper_emb = np.load('model/baseline/tmp/paper_emb.npy')
+        # test的
+        predictions = np.load('model/baseline/tmp/'+t+'/embedding_predictions.npy')
+        sort_y = np.load('model/baseline/tmp/'+t+'/sort_y.npy')
+        x_all = np.load('model/baseline/tmp/'+t+'/x_all.npy')
+        paper_emb = np.load('model/baseline/tmp/'+t+'/paper_emb.npy')
 
     if save:
         if t == 'train':
@@ -288,8 +284,7 @@ def prepare_data(t='train', emb='GraphSAGE', save=True, load=False):
             if emb == 'deepwalk':
                 x_all, shuffled_y, paper_emb = next(embedding_loader(emb_2017, y, 'DeepWalk', y.shape[0]))
             elif emb == 'GraphSAGE':
-                x_all, shuffled_y, paper_emb = next(
-                    embedding_loader(sage_emb, y, 'GraphSAGE', y.shape[0]))  # 裡面會shuffle過
+                x_all, shuffled_y, paper_emb = next(embedding_loader(sage_emb, y, 'GraphSAGE', y.shape[0]))  # 裡面會shuffle過
         elif t == 'test':
             y = test2018  # testing
             if emb == 'deepwalk':
@@ -306,17 +301,17 @@ def prepare_data(t='train', emb='GraphSAGE', save=True, load=False):
         # 一次load全部data做predict
         predictions = model.predict(x_all, workers=4)  # 預測paper_emb
 
-        np.save('model/baseline/tmp/embedding_predictions.npy', predictions)
-        np.save('model/baseline/tmp/sort_y.npy', sort_y)
-        np.save('model/baseline/tmp/x_all.npy', x_all)
-        np.save('model/baseline/tmp/paper_emb.npy', paper_emb)
+        np.save('model/baseline/tmp/'+t+'/embedding_predictions.npy', predictions)
+        np.save('model/baseline/tmp/'+t+'/sort_y.npy', sort_y)
+        np.save('model/baseline/tmp/'+t+'/x_all.npy', x_all)
+        np.save('model/baseline/tmp/'+t+'/paper_emb.npy', paper_emb)
     return sort_y, x_all, paper_emb, predictions, rec(paper_emb_all, y_all, predictions, t=t)
 
 
 K = 150
 # sort_y, x_all, paper_emb, predictions = prepare_data()  # train
-sort_y, x_all, paper_emb, predictions, recommend_papers = prepare_data(t='test')
-# sort_y, x_all, paper_emb, predictions, recommend_papers = prepare_data(t='test', load=True)
+# sort_y, x_all, paper_emb, predictions, recommend_papers = prepare_data(t='test')
+sort_y, x_all, paper_emb, predictions, recommend_papers = prepare_data(t='test', load=True)
 
 
 def knn_rec():
@@ -340,12 +335,9 @@ def knn_rec():
         i += 1
 
 
-# dot for graphSAGE FIXME 答案在testing上的成效未知
+# dot for graphSAGE
 # graph_scores = np.dot(paper_emb_all, paper_emb.T)  # train only
 # graph_recommend_papers = y_all[np.argsort(graph_scores, axis=0)[::-1]][1:K+1]
-#
-# scores = np.dot(np.unique(paper_emb_all, axis=0), predictions.T)
-# recommend_papers = y_all[np.argsort(scores, axis=0)[::-1]][1:K+1]
 
 # cosine for deepwalk
 cos_graph = cosine_similarity(paper_emb_all, paper_emb)
@@ -360,11 +352,8 @@ def generate_ans(data, t='train'):
         ans_t = paper_refs[paper_refs.new_papr_id.isin(data), 'join']
         ans = ans_t.apply(lambda x: list(map(int, x.split(','))))
     else:
-        # test_ans = data.sort_values(by=['new_papr_id']).reset_index(drop=True)
-        # ans = test_ans.references.apply(lambda x: list(filter(None.__ne__, list(map(comparison.get, map(int, ast.literal_eval(x)))))))
-        dblp = dblp_top50_test.drop_duplicates(subset=['new_papr_id']).reset_index(drop=True)
+        dblp = dblp_top50_test.drop_duplicates(subset=['new_papr_id']).sort_values(by=['new_papr_id']).reset_index(drop=True)
         test_ans = pd.concat([dblp[dblp['new_papr_id'].eq(x)] for x in data], ignore_index=True).fillna(value='[]')
-        # test_ans['references'] = test_ans['references'].apply(lambda d: d if isinstance(d, list) else [])  # fill na with empty list
         ans = test_ans.references.apply(lambda x: list(filter(None.__ne__, list(map(comparison.get, map(int, ast.literal_eval(x)))))))
     return ans
 
@@ -373,15 +362,9 @@ def generate_ans(data, t='train'):
 # ansK = ans['join'].apply(lambda x: list(map(int, x.split(','))))
 # ansK = generate_ans(train2017)
 ansK = generate_ans(y_all)
-# print(metrics.mapk(ansK.tolist(), graph_recommend_papers.T.tolist(), K))
 
 # testing 2018 AAAI
-# test_ansK = generate_ans(test2018, t='test')
 test_ansK = generate_ans(sort_y, t='test')
-# print(metrics.mapk(test_ansK.tolist(), recommend_papers.T.tolist(), K))
-
-# test hot
-# print(metrics.mapk(test_ansK.tolist(), np.array([test_hot]*test_ansK.shape[0]).tolist(), K))
 
 
 def _ark(actual, predicted, k=10):
