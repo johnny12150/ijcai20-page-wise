@@ -32,30 +32,31 @@ graph_op = imported_graph.get_operations()
 #     for i in graph_op:
 #         f.write(str(i))
 
-graph_b0 = tf.get_default_graph().get_operation_by_name('dense_1_vars/bias')
-graph_b1 = tf.get_default_graph().get_operation_by_name('dense_1_vars/bias_1')
-print(graph_b0.values())
+# graph_b0 = imported_graph.get_operation_by_name('dense_1_vars/bias')
+# graph_b1 = imported_graph.get_operation_by_name('dense_1_vars/bias_1')
+# print(graph_b0.values())
 
 # https://stackoverflow.com/questions/42769435/get-variable-does-not-work-after-session-restoration
 sess = tf.Session()
 saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
 # saver.restore(sess, tf.train.latest_checkpoint('F:/volume/0217graphsage/0106/model_output'))
 
-# FIXME error: You must feed a value for placeholder tensor 'Placeholder' with dtype
-sess.run(tf.global_variables_initializer())
-# print(tf.get_variable("bias"))
 print(sess.run('dense_1_vars/bias'))
+
+# print(imported_graph.get_tensor_by_name('Placeholder:0'))
+# print(imported_graph.get_operation_by_name('Placeholder'))
+# sess.run(tf.global_variables_initializer())
 
 # get weight, https://ithelp.ithome.com.tw/articles/10187786
 all_vars = tf.trainable_variables()
 # print(all_vars[6].name)
 # print(sess.run(all_vars[6]).shape)
 # call layer with saved weights
-node_pred = Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], act=lambda x: x)
+node_pred = Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10], act=lambda x: x)
 
-sample = np.zeros((2, 100)).astype('float32')
+sample = np.zeros((2, 200)).astype('float32')
 node_preds = node_pred(sample)
-print(node_preds.eval(session=sess))
+# print(node_preds.eval(session=sess))
 
 # print(np.where(emb_node == 1))  # where is the paper id
 # print(paper_emb[np.where(emb_node == 1)[0]][0].shape)  # get emb by paper id
@@ -67,7 +68,6 @@ def gen_paper(nodes, batch_i):
     index_i = np.where(emb_node == batch_i)[0]
     paper_i_emb = paper_emb[index_i][0]
     exclude_i = np.delete(paper_emb, index_i, axis=0)  # exclude row i
-    # fixme times可能不用減 1
     paper_i_pair = np.array([paper_i_emb.tolist(), ] * (n_times-1))  # repeat rows
     # paper_i_pair = np.repeat(paper_i_pair, (n_times-1))
     paper_i_pair = np.concatenate((paper_i_pair, exclude_i), axis=1)
@@ -80,25 +80,33 @@ def gen_paper(nodes, batch_i):
     yield batch_x, batch_y, np.delete(emb_node, index_i)
 
 
-# fixme should use all_paper_id, instead of emb_node
 # to reduce memory usage, use batch prediction
 # batch_paths = np.random.choice(emb_node, size=emb_node.shape[0])
 batch_paths = np.random.choice(emb_node, size=100)
 ans = []
 rs = []
+acc = 0
 K = 150
 i = 0
+# TODO modify generator to reduce RAM (move for into func)
 for batch_i in tqdm(batch_paths):
     x, y, classes = next(gen_paper(emb_node, batch_i))
-    # if output value > 0.5, keep classes
-    i_prediction = sess.run(node_pred(x.astype('float32'))).reshape(-1)
-    # sort classes and output at the same time
-    sorter = i_prediction.argsort()[::-1]  # reverse
-    i_prediction = i_prediction[sorter][:K]
-    classes = classes[sorter][:K]
-    ans.append(y.tolist())
-    rs.append(classes.tolist())
+    # avoid empty answers
+    if len(y) > 0:
+        i_prediction = sess.run(node_pred(x.astype('float32'))).reshape(-1)
+        # sort classes and output at the same time
+        sorter = i_prediction.argsort()[::-1]  # reverse
+        i_prediction = i_prediction[sorter][:K]
+        classes = classes[sorter][:K]
+        ans.append(y.tolist())
+        rs.append(classes.tolist())
+        # calculate accuracy
+        # 只算答案是1的部分，看model有沒有train起來
+        ans_len = y.shape[0]
+        i_acc = np.sum(np.isin(classes[:ans_len], y)) / ans_len
+        acc = (acc + i_acc) / len(ans)
 
-# todo calculate MAP
+# calculate MAP
 print(metrics.mapk(ans, rs, K))
+print(acc)
 
