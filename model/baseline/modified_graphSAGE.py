@@ -11,6 +11,7 @@ with open('F:/volume/0217graphsage/0106/all_edge.pkl', 'rb') as file:
 # filter out relation = 0 (reference)
 all_paper = all_edge.loc[all_edge.rel == 0]
 all_paprr_id = list(set(all_paper['head'].tolist() + all_paper['tail'].tolist()))
+candidate_ids = list(set(all_paper['tail'].tolist()))
 
 # load paper embedding
 paper_emb = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/embedding.npy')
@@ -19,8 +20,11 @@ emb_node = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/emb_node
 index = np.where(np.in1d(emb_node, all_paprr_id))
 emb_node = emb_node[np.in1d(emb_node, index)]
 paper_emb = paper_emb[index]
+# find candidate papers' embedding
+c_index = np.where(np.in1d(emb_node, candidate_ids))
+candidate_paper_emb = paper_emb[c_index]
 
-# use trained tf NN predict cite or not
+# use trained tf NN to predict cite or not
 tf.reset_default_graph()
 saver = tf.train.import_meta_graph('F:/volume/0217graphsage/0106/model_output/model.meta')
 # https://stackoverflow.com/questions/44251328/tensorflow-print-all-placeholder-variable-names-from-meta-graph
@@ -54,26 +58,28 @@ all_vars = tf.trainable_variables()
 # call layer with saved weights
 node_pred = Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10], act=lambda x: x)
 
-sample = np.zeros((2, 200)).astype('float32')
-node_preds = node_pred(sample)
+# sample = np.zeros((2, 200)).astype('float32')
+# node_preds = node_pred(sample)
 # print(node_preds.eval(session=sess))
 
 # print(np.where(emb_node == 1))  # where is the paper id
 # print(paper_emb[np.where(emb_node == 1)[0]][0].shape)  # get emb by paper id
 
 
+# todo 至少存 2篇以上 paper的全部 pair
 # create paper pair
 def gen_paper(nodes, batch_i):
     n_times = nodes.shape[0]
     index_i = np.where(emb_node == batch_i)[0]
-    paper_i_emb = paper_emb[index_i][0]
-    exclude_i = np.delete(paper_emb, index_i, axis=0)  # exclude row i
-    paper_i_pair = np.array([paper_i_emb.tolist(), ] * (n_times-1))  # repeat rows
-    # paper_i_pair = np.repeat(paper_i_pair, (n_times-1))
-    paper_i_pair = np.concatenate((paper_i_pair, exclude_i), axis=1)
+    paper_i_emb = paper_emb[index_i]
+    # exclude_i = np.delete(paper_emb, index_i, axis=0)  # exclude row i
+    # paper_i_pair = np.array([paper_i_emb.tolist(), ] * (n_times-1))  # repeat rows
+    # paper_i_pair = np.concatenate((paper_i_pair, exclude_i), axis=1)
+    paper_i_pair = np.array([paper_i_emb.tolist(), ] * len(candidate_ids))  # repeat rows
+    paper_i_pair = np.concatenate((paper_i_pair, candidate_paper_emb), axis=1)
     batch_y = all_paper[all_edge['head'] == batch_i]['tail'].values  # find tail ids
     # set 1 at tail index
-    # i_cited_index = np.where(np.in1d(emb_node, all_paper[all_edge['head'] == 0]['tail'].values))
+    # i_cited_index = np.where(np.in1d(emb_node, all_paper[all_edge['head'] == batch_i]['tail'].values))
     # batch_y = np.zeros(n_times-1)
     # batch_y[np.in1d(batch_y, i_cited_index)] = 1
     batch_x = paper_i_pair
@@ -88,7 +94,7 @@ rs = []
 acc = 0
 K = 150
 i = 0
-# TODO modify generator to reduce RAM (move for into func)
+# TODO modify generator to reduce RAM (move for into func), 沒在tail出現過不當候選人
 for batch_i in tqdm(batch_paths):
     x, y, classes = next(gen_paper(emb_node, batch_i))
     # avoid empty answers
@@ -105,6 +111,31 @@ for batch_i in tqdm(batch_paths):
         ans_len = y.shape[0]
         i_acc = np.sum(np.isin(classes[:ans_len], y)) / ans_len
         acc = (acc + i_acc) / len(ans)
+
+
+# check graphsage dnn
+def sage_nn(nodes):
+    x = []
+    y = []
+    for batch_i in tqdm(nodes):
+        # 找node_i真實有site的, 讓nn判斷
+        index_i = np.where(emb_node == batch_i)[0]
+        paper_i_emb = paper_emb[index_i]  # paper i embedding
+        i_cited_index = np.where(np.in1d(emb_node, all_paper[all_edge['head'] == batch_i]['tail'].values))
+        paper_i_cite_emb = paper_emb[i_cited_index]  # paper i 有cite的embedding
+        num_cited = paper_i_cite_emb.shape[0]  # paper i cite 幾篇
+        if num_cited > 0:
+            repeat_emb = np.tile(paper_i_emb, num_cited).reshape(-1, 100)  # clone rows
+            x.append(np.concatenate((repeat_emb, paper_i_cite_emb), axis=1))
+            y.extend(np.ones(num_cited).tolist())
+    return np.array(x), np.array(y)
+
+
+x, y = sage_nn(emb_node)
+x = x.reshape(-1, 200)
+prediction = sess.run(node_pred(x.astype('float32')))
+prediction = np.round(prediction.reshape(-1))  # flatten & to 0/ 1
+print(np.sum(np.equal(prediction, y))/ len(y))
 
 # calculate MAP
 print(metrics.mapk(ans, rs, K))
