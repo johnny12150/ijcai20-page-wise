@@ -94,7 +94,7 @@ rs = []
 acc = 0
 K = 150
 i = 0
-# TODO modify generator to reduce RAM (move for into func), 沒在tail出現過不當候選人
+
 for batch_i in tqdm(batch_paths):
     x, y, classes = next(gen_paper(emb_node, batch_i))
     # avoid empty answers
@@ -124,15 +124,21 @@ def sage_nn(nodes):
         i_cited_index = np.where(np.in1d(emb_node, all_paper[all_edge['head'] == batch_i]['tail'].values))
         paper_i_cite_emb = paper_emb[i_cited_index]  # paper i 有cite的embedding
         num_cited = paper_i_cite_emb.shape[0]  # paper i cite 幾篇
+        # add negative sample
+        num_neg_sample = num_cited  # 設定negative sample數量
+        neg_index = np.where(~np.in1d(emb_node, all_paper[all_edge['head'] == 9]['tail'].values))[0]
+        neg_index = np.random.choice(neg_index, num_neg_sample)  # random select
+        neg_sample_emb = paper_emb[neg_index]
         if num_cited > 0:
             repeat_emb = np.tile(paper_i_emb, num_cited).reshape(-1, 100)  # clone rows
-            x.append(np.concatenate((repeat_emb, paper_i_cite_emb), axis=1))
+            x.extend(np.concatenate((repeat_emb, paper_i_cite_emb), axis=1))  # positive sample
+            x.extend(np.concatenate((np.tile(paper_i_emb, num_neg_sample).reshape(-1, 100), neg_sample_emb), axis=1))  # add negative sample
             y.extend(np.ones(num_cited).tolist())
+            y.extend(np.zeros(num_neg_sample).tolist())
     return np.array(x), np.array(y)
 
 
 x, y = sage_nn(emb_node)
-x = x.reshape(-1, 200)
 prediction = sess.run(node_pred(x.astype('float32')))
 prediction = np.round(prediction.reshape(-1))  # flatten & to 0/ 1
 print(np.sum(np.equal(prediction, y))/ len(y))
