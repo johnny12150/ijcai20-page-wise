@@ -66,7 +66,6 @@ node_pred = Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9
 # print(paper_emb[np.where(emb_node == 1)[0]][0].shape)  # get emb by paper id
 
 
-# todo 至少存 2篇以上 paper的全部 pair
 # create paper pair
 def gen_paper(nodes, batch_i):
     n_times = nodes.shape[0]
@@ -75,7 +74,9 @@ def gen_paper(nodes, batch_i):
     # exclude_i = np.delete(paper_emb, index_i, axis=0)  # exclude row i
     # paper_i_pair = np.array([paper_i_emb.tolist(), ] * (n_times-1))  # repeat rows
     # paper_i_pair = np.concatenate((paper_i_pair, exclude_i), axis=1)
-    paper_i_pair = np.array([paper_i_emb.tolist(), ] * len(candidate_ids))  # repeat rows
+    # todo 考慮不排除自己
+    # exclude_i = np.delete(candidate_paper_emb, index_i, axis=0)
+    paper_i_pair = np.array([paper_i_emb.tolist(), ] * len(candidate_ids)).reshape(-1, 100)  # repeat rows
     paper_i_pair = np.concatenate((paper_i_pair, candidate_paper_emb), axis=1)
     batch_y = all_paper[all_edge['head'] == batch_i]['tail'].values  # find tail ids
     # set 1 at tail index
@@ -83,7 +84,8 @@ def gen_paper(nodes, batch_i):
     # batch_y = np.zeros(n_times-1)
     # batch_y[np.in1d(batch_y, i_cited_index)] = 1
     batch_x = paper_i_pair
-    yield batch_x, batch_y, np.delete(emb_node, index_i)
+    # yield batch_x, batch_y, np.delete(emb_node, index_i)
+    yield batch_x, batch_y, candidate_ids
 
 
 # to reduce memory usage, use batch prediction
@@ -91,21 +93,33 @@ def gen_paper(nodes, batch_i):
 batch_paths = np.random.choice(emb_node, size=100)
 ans = []
 rs = []
+batch_x, batch_y, batch_classes = [], [], []
 acc = 0
 K = 150
 i = 0
 
+# todo batch_path 應該只考慮有出現在 head的paper
 for batch_i in tqdm(batch_paths):
     x, y, classes = next(gen_paper(emb_node, batch_i))
-    # avoid empty answers
     if len(y) > 0:
-        i_prediction = sess.run(node_pred(x.astype('float32'))).reshape(-1)
+        batch_x.append(x)
+        batch_y.append(y.tolist())
+        batch_classes.append(classes)
+    # avoid empty answers
+    if len(batch_x) > 4:
+        batch_x_arr = np.array(batch_x).astype('float32').reshape(-1, 200)
+        i_prediction = sess.run(node_pred(batch_x_arr)).reshape(len(batch_x), -1)
         # sort classes and output at the same time
-        sorter = i_prediction.argsort()[::-1]  # reverse
-        i_prediction = i_prediction[sorter][:K]
-        classes = classes[sorter][:K]
-        ans.append(y.tolist())
-        rs.append(classes.tolist())
+        # sorter = np.argsort(i_prediction, axis=0)[::-1][:, :K]  # reverse
+        # i_prediction = i_prediction[sorter]
+        # classes = np.array(batch_classes)[sorter]
+        new_sorter = i_prediction.argsort(axis=-1)[::-1][:, :K]  # sort and select first 150
+        classes = np.take_along_axis(np.array(batch_classes), new_sorter, axis=-1)
+        ans.extend(batch_y)
+        rs.extend(classes.tolist())
+        batch_x, batch_y, batch_classes = [], [], []  # reset
+
+
         # calculate accuracy
         # 只算答案是1的部分，看model有沒有train起來
         ans_len = y.shape[0]
