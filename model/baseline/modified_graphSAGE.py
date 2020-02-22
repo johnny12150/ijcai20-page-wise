@@ -5,6 +5,7 @@ from tqdm import tqdm
 import ml_metrics as metrics
 from model.baseline.graphsage_dnn.Layers import Dense
 
+task = 1
 with open('F:/volume/0217graphsage/0106/all_edge.pkl', 'rb') as file:
     all_edge = pickle.load(file)
 
@@ -88,43 +89,50 @@ def gen_paper(nodes, batch_i):
     yield batch_x, batch_y, candidate_ids
 
 
-# to reduce memory usage, use batch prediction
-# batch_paths = np.random.choice(emb_node, size=emb_node.shape[0])
-batch_paths = np.random.choice(emb_node, size=100)
-ans = []
-rs = []
-batch_x, batch_y, batch_classes = [], [], []
-acc = 0
-K = 150
-i = 0
+if task == 0:
+    # to reduce memory usage, use batch prediction
+    # batch_paths = np.random.choice(emb_node, size=emb_node.shape[0])
+    batch_paths = np.random.choice(emb_node, size=100)
+    ans = []
+    rs = []
+    batch_x, batch_y, batch_classes = [], [], []
+    acc = 0
+    K = 150
+    i = 0
 
-# todo batch_path 應該只考慮有出現在 head的paper
-for batch_i in tqdm(batch_paths):
-    x, y, classes = next(gen_paper(emb_node, batch_i))
-    if len(y) > 0:
-        batch_x.append(x)
-        batch_y.append(y.tolist())
-        batch_classes.append(classes)
-    # avoid empty answers
-    if len(batch_x) > 4:
-        batch_x_arr = np.array(batch_x).astype('float32').reshape(-1, 200)
-        i_prediction = sess.run(node_pred(batch_x_arr)).reshape(len(batch_x), -1)
-        # sort classes and output at the same time
-        # sorter = np.argsort(i_prediction, axis=0)[::-1][:, :K]  # reverse
-        # i_prediction = i_prediction[sorter]
-        # classes = np.array(batch_classes)[sorter]
-        new_sorter = i_prediction.argsort(axis=-1)[::-1][:, :K]  # sort and select first 150
-        classes = np.take_along_axis(np.array(batch_classes), new_sorter, axis=-1)
-        ans.extend(batch_y)
-        rs.extend(classes.tolist())
-        batch_x, batch_y, batch_classes = [], [], []  # reset
+    # todo batch_path 應該只考慮有出現在 head的paper
+    for batch_i in tqdm(batch_paths):
+        x, y, classes = next(gen_paper(emb_node, batch_i))
+        if len(y) > 0:
+            batch_x.append(x)
+            batch_y.append(y.tolist())
+            batch_classes.append(classes)
+        # avoid empty answers
+        if len(batch_x) > 4:
+            batch_x_arr = np.array(batch_x).astype('float32').reshape(-1, 200)
+            i_prediction = sess.run(node_pred(batch_x_arr)).reshape(len(batch_x), -1)
+            del batch_x_arr
+            # sort classes and output at the same time
+            # sorter = np.argsort(i_prediction, axis=1)[::-1][:, :K]  # reverse
+            # i_prediction = i_prediction[sorter]
+            # classes = np.array(batch_classes)[sorter]
+            # https://stackoverflow.com/questions/33140674/argsort-for-a-multidimensional-ndarray
+            # https://stackoverflow.com/questions/20103779/index-2d-numpy-array-by-a-2d-array-of-indices-without-loops
+            new_sorter = i_prediction.argsort(axis=1)[::-1][:, :K]  # sort and select first 150
+            classes = np.take_along_axis(np.array(batch_classes), new_sorter, axis=1)
+            ans.extend(batch_y)
+            rs.extend(classes.tolist())
+            batch_x, batch_y, batch_classes = [], [], []  # reset
 
+            # calculate accuracy
+            # 只算答案是1的部分，看model有沒有train起來
+            # ans_len = y.shape[0]
+            # i_acc = np.sum(np.isin(classes[:ans_len], y)) / ans_len
+            # acc = (acc + i_acc) / len(ans)
 
-        # calculate accuracy
-        # 只算答案是1的部分，看model有沒有train起來
-        ans_len = y.shape[0]
-        i_acc = np.sum(np.isin(classes[:ans_len], y)) / ans_len
-        acc = (acc + i_acc) / len(ans)
+    # calculate MAP
+    print(metrics.mapk(ans, rs, K))
+    print(acc)
 
 
 # check graphsage dnn
@@ -135,15 +143,19 @@ def sage_nn(nodes):
         # 找node_i真實有site的, 讓nn判斷
         index_i = np.where(emb_node == batch_i)[0]
         paper_i_emb = paper_emb[index_i]  # paper i embedding
-        i_cited_index = np.where(np.in1d(emb_node, all_paper[all_edge['head'] == batch_i]['tail'].values))
+        cite_paper = all_paper[all_edge['head'] == batch_i]['tail'].values
+        i_cited_index = np.where(np.in1d(emb_node, cite_paper))
         paper_i_cite_emb = paper_emb[i_cited_index]  # paper i 有cite的embedding
         num_cited = paper_i_cite_emb.shape[0]  # paper i cite 幾篇
         # add negative sample
         num_neg_sample = num_cited  # 設定negative sample數量
-        neg_index = np.where(~np.in1d(emb_node, all_paper[all_edge['head'] == 9]['tail'].values))[0]
+        # neg_index = np.where(~np.in1d(emb_node, cite_paper))[0]
+        # negative index就是positive的差集
+        neg_index = list(set(range(len(emb_node))) - set(i_cited_index[0].tolist()))
         neg_index = np.random.choice(neg_index, num_neg_sample)  # random select
         neg_sample_emb = paper_emb[neg_index]
         if num_cited > 0:
+            # todo speed up the process
             repeat_emb = np.tile(paper_i_emb, num_cited).reshape(-1, 100)  # clone rows
             x.extend(np.concatenate((repeat_emb, paper_i_cite_emb), axis=1))  # positive sample
             x.extend(np.concatenate((np.tile(paper_i_emb, num_neg_sample).reshape(-1, 100), neg_sample_emb), axis=1))  # add negative sample
@@ -153,11 +165,12 @@ def sage_nn(nodes):
 
 
 x, y = sage_nn(emb_node)
-prediction = sess.run(node_pred(x.astype('float32')))
+y_logit = y.astype('float32').reshape(-1, 1)
+prediction_logit = sess.run(node_pred(x.astype('float32')))
+loss = sess.run(tf.nn.sigmoid_cross_entropy_with_logits(logits=prediction_logit, labels=y_logit))
+print(np.sum(loss.reshape(-1))/ len(loss))
+prediction = sess.run(tf.nn.sigmoid(prediction_logit))
 prediction = np.round(prediction.reshape(-1))  # flatten & to 0/ 1
 print(np.sum(np.equal(prediction, y))/ len(y))
 
-# calculate MAP
-print(metrics.mapk(ans, rs, K))
-print(acc)
 

@@ -110,8 +110,8 @@ class Dense(Layer):
         hidden_2 = self.act(hidden_2)
         hidden_3 = tf.matmul(hidden_2, self.vars['weights_2'])
         hidden_3 += self.vars['bias_2']
-        output = tf.nn.sigmoid(hidden_3)
-
+        # output = tf.nn.sigmoid(hidden_3)
+        output = hidden_3
         return output
 
 
