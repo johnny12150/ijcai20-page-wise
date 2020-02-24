@@ -9,10 +9,19 @@ task = 1
 with open('F:/volume/0217graphsage/0106/all_edge.pkl', 'rb') as file:
     all_edge = pickle.load(file)
 
+# fixme: df原始 id map到 graphsage node的 id
+with open('F:/volume/0217graphsage/0106/id_map.pkl', 'rb') as file:
+    id_map = pickle.load(file)
+
+# all_edge['head'] = all_edge['head'].map(id_map)
+# all_edge['tail'] = all_edge['tail'].map(id_map)
+
 # filter out relation = 0 (reference)
 all_paper = all_edge.loc[all_edge.rel == 0]
 all_paprr_id = list(set(all_paper['head'].tolist() + all_paper['tail'].tolist()))
 candidate_ids = list(set(all_paper['tail'].tolist()))
+# 只有出現在head過的paper
+head_paper_ids = list(set(all_paper['head'].tolist()))
 
 # load paper embedding
 paper_emb = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/embedding.npy')
@@ -73,9 +82,9 @@ def gen_paper(nodes, batch_i):
     index_i = np.where(emb_node == batch_i)[0]
     paper_i_emb = paper_emb[index_i]
     # exclude_i = np.delete(paper_emb, index_i, axis=0)  # exclude row i
+    # todo 考慮不排除自己
     # paper_i_pair = np.array([paper_i_emb.tolist(), ] * (n_times-1))  # repeat rows
     # paper_i_pair = np.concatenate((paper_i_pair, exclude_i), axis=1)
-    # todo 考慮不排除自己
     # exclude_i = np.delete(candidate_paper_emb, index_i, axis=0)
     paper_i_pair = np.array([paper_i_emb.tolist(), ] * len(candidate_ids)).reshape(-1, 100)  # repeat rows
     paper_i_pair = np.concatenate((paper_i_pair, candidate_paper_emb), axis=1)
@@ -136,7 +145,7 @@ if task == 0:
 
 
 # check graphsage dnn
-def sage_nn(nodes):
+def sage_nn(nodes, save=True):
     x = []
     y = []
     for batch_i in tqdm(nodes):
@@ -149,24 +158,27 @@ def sage_nn(nodes):
         num_cited = paper_i_cite_emb.shape[0]  # paper i cite 幾篇
         # add negative sample
         num_neg_sample = num_cited  # 設定negative sample數量
-        # neg_index = np.where(~np.in1d(emb_node, cite_paper))[0]
+        neg_index = np.where(~np.in1d(candidate_ids, cite_paper))[0]
         # negative index就是positive的差集
-        neg_index = list(set(range(len(emb_node))) - set(i_cited_index[0].tolist()))
+        # neg_index = list(set(range(len(emb_node))) - set(i_cited_index[0].tolist()))
         neg_index = np.random.choice(neg_index, num_neg_sample)  # random select
         neg_sample_emb = paper_emb[neg_index]
         if num_cited > 0:
-            # todo speed up the process
             repeat_emb = np.tile(paper_i_emb, num_cited).reshape(-1, 100)  # clone rows
             x.extend(np.concatenate((repeat_emb, paper_i_cite_emb), axis=1))  # positive sample
             x.extend(np.concatenate((np.tile(paper_i_emb, num_neg_sample).reshape(-1, 100), neg_sample_emb), axis=1))  # add negative sample
             y.extend(np.ones(num_cited).tolist())
             y.extend(np.zeros(num_neg_sample).tolist())
+
+    if save:
+        np.save('./paper_pair.npy', np.array(x))
+        np.save('./pair_label.npy', np.array(y))
     return np.array(x), np.array(y)
 
 
-x, y = sage_nn(emb_node)
+x, y = sage_nn(head_paper_ids)
 y_logit = y.astype('float32').reshape(-1, 1)
-prediction_logit = sess.run(node_pred(x.astype('float32')))
+prediction_logit = sess.run(node_pred(x.astype('float32')))  # predict
 loss = sess.run(tf.nn.sigmoid_cross_entropy_with_logits(logits=prediction_logit, labels=y_logit))
 print(np.sum(loss.reshape(-1))/ len(loss))
 prediction = sess.run(tf.nn.sigmoid(prediction_logit))
