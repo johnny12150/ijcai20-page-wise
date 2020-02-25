@@ -9,16 +9,17 @@ task = 1
 with open('F:/volume/0217graphsage/0106/all_edge.pkl', 'rb') as file:
     all_edge = pickle.load(file)
 
-# fixme: df原始 id map到 graphsage node的 id
+# 把df原始 id map到 graphsage node的 id
 with open('F:/volume/0217graphsage/0106/id_map.pkl', 'rb') as file:
     id_map = pickle.load(file)
 
+# 有的化, loss = 2.667, acc = 0.51
 # all_edge['head'] = all_edge['head'].map(id_map)
 # all_edge['tail'] = all_edge['tail'].map(id_map)
 
 # filter out relation = 0 (reference)
 all_paper = all_edge.loc[all_edge.rel == 0]
-all_paprr_id = list(set(all_paper['head'].tolist() + all_paper['tail'].tolist()))
+all_paper_id = list(set(all_paper['head'].tolist() + all_paper['tail'].tolist()))
 candidate_ids = list(set(all_paper['tail'].tolist()))
 # 只有出現在head過的paper
 head_paper_ids = list(set(all_paper['head'].tolist()))
@@ -27,8 +28,8 @@ head_paper_ids = list(set(all_paper['head'].tolist()))
 paper_emb = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/embedding.npy')
 emb_node = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/emb_node.npy')
 # keep node and emb only in paper_id
-index = np.where(np.in1d(emb_node, all_paprr_id))
-emb_node = emb_node[np.in1d(emb_node, index)]
+index = np.where(np.in1d(emb_node, all_paper_id))
+emb_node = emb_node[index]
 paper_emb = paper_emb[index]
 # find candidate papers' embedding
 c_index = np.where(np.in1d(emb_node, candidate_ids))
@@ -52,14 +53,12 @@ graph_op = imported_graph.get_operations()
 
 # https://stackoverflow.com/questions/42769435/get-variable-does-not-work-after-session-restoration
 sess = tf.Session()
+# sess.run(tf.global_variables_initializer())
 saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
 # saver.restore(sess, tf.train.latest_checkpoint('F:/volume/0217graphsage/0106/model_output'))
 
-print(sess.run('dense_1_vars/bias'))
-
 # print(imported_graph.get_tensor_by_name('Placeholder:0'))
 # print(imported_graph.get_operation_by_name('Placeholder'))
-# sess.run(tf.global_variables_initializer())
 
 # get weight, https://ithelp.ithome.com.tw/articles/10187786
 all_vars = tf.trainable_variables()
@@ -88,7 +87,7 @@ def gen_paper(nodes, batch_i):
     # exclude_i = np.delete(candidate_paper_emb, index_i, axis=0)
     paper_i_pair = np.array([paper_i_emb.tolist(), ] * len(candidate_ids)).reshape(-1, 100)  # repeat rows
     paper_i_pair = np.concatenate((paper_i_pair, candidate_paper_emb), axis=1)
-    batch_y = all_paper[all_edge['head'] == batch_i]['tail'].values  # find tail ids
+    batch_y = all_paper[all_paper['head'] == batch_i]['tail'].values  # find tail ids
     # set 1 at tail index
     # i_cited_index = np.where(np.in1d(emb_node, all_paper[all_edge['head'] == batch_i]['tail'].values))
     # batch_y = np.zeros(n_times-1)
@@ -152,23 +151,30 @@ def sage_nn(nodes, save=True):
         # 找node_i真實有site的, 讓nn判斷
         index_i = np.where(emb_node == batch_i)[0]
         paper_i_emb = paper_emb[index_i]  # paper i embedding
-        cite_paper = all_paper[all_edge['head'] == batch_i]['tail'].values
+        cite_paper = all_paper[all_paper['head'] == batch_i]['tail'].values
         i_cited_index = np.where(np.in1d(emb_node, cite_paper))
         paper_i_cite_emb = paper_emb[i_cited_index]  # paper i 有cite的embedding
         num_cited = paper_i_cite_emb.shape[0]  # paper i cite 幾篇
         # add negative sample
         num_neg_sample = num_cited  # 設定negative sample數量
-        neg_index = np.where(~np.in1d(candidate_ids, cite_paper))[0]
+        # neg_index = np.where(~np.in1d(candidate_ids, cite_paper))[0]
+
         # negative index就是positive的差集
         # neg_index = list(set(range(len(emb_node))) - set(i_cited_index[0].tolist()))
-        neg_index = np.random.choice(neg_index, num_neg_sample)  # random select
+        # neg_index = np.random.choice(neg_index, num_neg_sample)  # random select
+
+        neg_index = np.where(np.in1d(emb_node, np.random.choice(candidate_ids, size=num_neg_sample)))[0]
         neg_sample_emb = paper_emb[neg_index]
+        num_neg_sample = neg_sample_emb.shape[0]  # avoid node not exist
         if num_cited > 0:
-            repeat_emb = np.tile(paper_i_emb, num_cited).reshape(-1, 100)  # clone rows
-            x.extend(np.concatenate((repeat_emb, paper_i_cite_emb), axis=1))  # positive sample
-            x.extend(np.concatenate((np.tile(paper_i_emb, num_neg_sample).reshape(-1, 100), neg_sample_emb), axis=1))  # add negative sample
-            y.extend(np.ones(num_cited).tolist())
-            y.extend(np.zeros(num_neg_sample).tolist())
+            # repeat_emb = np.tile(paper_i_emb, (num_cited + num_neg_sample)).reshape(-1, 100)  # clone rows
+            repeat_emb = np.tile(paper_i_emb, (num_cited + num_neg_sample, 1))
+            embs = np.concatenate((paper_i_cite_emb, neg_sample_emb), axis=0)
+
+            x.extend(np.concatenate((repeat_emb, embs), axis=1))  # positive sample
+            # x.extend(np.concatenate((repeat_emb, paper_i_cite_emb), axis=1))  # positive sample
+            # x.extend(np.concatenate((np.tile(paper_i_emb, num_neg_sample).reshape(-1, 100), neg_sample_emb), axis=1))  # add negative sample
+            y.extend([1] * num_cited + [0] * num_neg_sample)
 
     if save:
         np.save('./paper_pair.npy', np.array(x))
