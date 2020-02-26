@@ -69,13 +69,13 @@ class Layer(object):
             tf.summary.histogram(self.name + '/vars/' + var, self.vars[var])
 
 
-class Dense(Layer):
+class custom_Dense(Layer):
     """Dense layer."""
 
     def __init__(self, w0, w1, w2, b0, b1, b2, dropout=0.,
                  act=tf.nn.relu, placeholders=None, bias=True, featureless=False,
                  sparse_inputs=False, **kwargs):
-        super(Dense, self).__init__(**kwargs)
+        super().__init__(**kwargs)
 
         self.dropout = dropout
 

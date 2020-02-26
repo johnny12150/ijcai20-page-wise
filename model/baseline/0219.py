@@ -41,7 +41,7 @@ all_paper = all_edge.loc[all_edge.rel == 0]
 paper_emb = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/embedding.npy')
 emb_node = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/emb_node.npy')
 
-# fixme keep node and emb only in paper_id
+# keep node and emb only in paper_id
 all_paper_id = list(set(all_paper['head'].tolist() + all_paper['tail'].tolist()))
 candidate_ids = list(set(all_paper['tail'].tolist()))
 index = np.where(np.in1d(emb_node, all_paper_id))
@@ -188,7 +188,7 @@ node_pred = Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9
 # %%
 temp = []
 label = []
-for i in range(0, 200000):
+for i in range(0, 10000):
     first_paper = np.where(emb_node == all_paper['head'].iloc[i])[0]
     second_paper = np.where(emb_node == all_paper['tail'].iloc[i])[0]
     x = np.concatenate((paper_emb[first_paper], paper_emb[second_paper]),axis=1)
@@ -217,7 +217,7 @@ temp = np.array(temp).astype('float32')
 
 # %%
 node_preds = node_pred((temp.astype('float32')))
-print(node_preds.eval(session=sess))
+# print(node_preds.eval(session=sess))
 loss = sess.run(tf.nn.sigmoid_cross_entropy_with_logits(logits=node_preds, labels=label))
 print('loss : ' + str(np.sum(loss.reshape(-1))/ len(loss)))
 prediction = sess.run(tf.nn.sigmoid(node_preds))

@@ -3,7 +3,7 @@ import tensorflow as tf
 import numpy as np
 from tqdm import tqdm
 import ml_metrics as metrics
-from model.baseline.graphsage_dnn.Layers import Dense
+from model.baseline.graphsage_dnn.Layers import custom_Dense
 
 task = 1
 with open('F:/volume/0217graphsage/0106/all_edge.pkl', 'rb') as file:
@@ -65,7 +65,7 @@ all_vars = tf.trainable_variables()
 # print(all_vars[6].name)
 # print(sess.run(all_vars[6]).shape)
 # call layer with saved weights
-node_pred = Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10], act=lambda x: x)
+node_pred = custom_Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10])
 
 # sample = np.zeros((2, 200)).astype('float32')
 # node_preds = node_pred(sample)
@@ -170,7 +170,6 @@ def sage_nn(nodes, save=True):
             # repeat_emb = np.tile(paper_i_emb, (num_cited + num_neg_sample)).reshape(-1, 100)  # clone rows
             repeat_emb = np.tile(paper_i_emb, (num_cited + num_neg_sample, 1))
             embs = np.concatenate((paper_i_cite_emb, neg_sample_emb), axis=0)
-
             x.extend(np.concatenate((repeat_emb, embs), axis=1))  # positive sample
             # x.extend(np.concatenate((repeat_emb, paper_i_cite_emb), axis=1))  # positive sample
             # x.extend(np.concatenate((np.tile(paper_i_emb, num_neg_sample).reshape(-1, 100), neg_sample_emb), axis=1))  # add negative sample
@@ -183,6 +182,9 @@ def sage_nn(nodes, save=True):
 
 
 x, y = sage_nn(head_paper_ids)
+# shuffle x, y
+# p = np.random.permutation(len(x))
+# x, y = x[p], y[p]
 y_logit = y.astype('float32').reshape(-1, 1)
 prediction_logit = sess.run(node_pred(x.astype('float32')))  # predict
 loss = sess.run(tf.nn.sigmoid_cross_entropy_with_logits(logits=prediction_logit, labels=y_logit))
