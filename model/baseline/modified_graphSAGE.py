@@ -12,8 +12,8 @@ with open('F:/volume/0217graphsage/0106/all_edge.pkl', 'rb') as file:
     all_edge = pickle.load(file)
 
 # 把df原始 id map到 graphsage node的 id
-with open('F:/volume/0217graphsage/0106/id_map.pkl', 'rb') as file:
-    id_map = pickle.load(file)
+# with open('F:/volume/0217graphsage/0106/id_map.pkl', 'rb') as file:
+#     id_map = pickle.load(file)
 
 # 有的化, loss = 2.667, acc = 0.51
 # all_edge['head'] = all_edge['head'].map(id_map)
@@ -32,7 +32,7 @@ emb_node = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/emb_node
 # keep node and emb only in paper_id
 index = np.where(np.in1d(emb_node, all_paper_id))
 emb_node = emb_node[index]
-paper_emb = paper_emb[index]
+paper_emb = paper_emb[index].astype('float32')
 # find candidate papers' embedding
 c_index = np.where(np.in1d(emb_node, candidate_ids))
 candidate_paper_emb = paper_emb[c_index]
@@ -79,67 +79,70 @@ def gen_paper(nodes, batch_i):
     # paper_i_pair = np.array([paper_i_emb.tolist(), ] * (n_times-1))  # repeat rows
     # paper_i_pair = np.concatenate((paper_i_pair, exclude_i), axis=1)
     # exclude_i = np.delete(candidate_paper_emb, index_i, axis=0)
-    paper_i_pair = np.array([paper_i_emb.tolist(), ] * len(candidate_ids)).reshape(-1, 100)  # repeat rows
+    paper_i_pair = np.tile(paper_i_emb, (len(candidate_ids), 1))  # repeat rows
     paper_i_pair = np.concatenate((paper_i_pair, candidate_paper_emb), axis=1)
     batch_y = all_paper[all_paper['head'] == batch_i]['tail'].values  # find tail ids
     # set 1 at tail index
     # i_cited_index = np.where(np.in1d(emb_node, all_paper[all_edge['head'] == batch_i]['tail'].values))
     # batch_y = np.zeros(n_times-1)
     # batch_y[np.in1d(batch_y, i_cited_index)] = 1
-    batch_x = paper_i_pair
     # yield batch_x, batch_y, np.delete(emb_node, index_i)
-    yield batch_x, batch_y, candidate_ids
+    yield paper_i_pair, batch_y
+
+
+def make_prediction(x):
+    with tf.Session() as sess:
+        saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
+        all_vars = tf.trainable_variables()
+        node_pred = custom_Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10])
+        i_prediction = sess.run(tf.nn.sigmoid(node_pred(x))).reshape(-1, len(candidate_ids))
+    # sort classes and output at the same time
+    # sorter = np.argsort(i_prediction, axis=1)[::-1][:, :K]  # reverse
+    # i_prediction = i_prediction[sorter]
+    # classes = np.array(batch_classes)[sorter]
+    # https://stackoverflow.com/questions/33140674/argsort-for-a-multidimensional-ndarray
+    # https://stackoverflow.com/questions/20103779/index-2d-numpy-array-by-a-2d-array-of-indices-without-loops
+    new_sorter = i_prediction.argsort(axis=1)[::-1][:, :K]  # sort and select first 150
+    classes = np.take_along_axis(np.array(batch_classes), new_sorter, axis=1)
+    return classes
 
 
 if task == 0:
     sess.close()
     # to reduce memory usage, use batch prediction
     # batch_paths = np.random.choice(emb_node, size=emb_node.shape[0])
-    batch_paths = np.random.choice(head_paper_ids, size=400)
+    # batch_paths = np.random.choice(head_paper_ids, size=300)
+    batch_paths = head_paper_ids[:300]
     ans = []
     rs = []
+    # todo 直接用np zeros避免list轉arr要耗額外的ram
     batch_x, batch_y, batch_classes = [], [], []
-    acc = 0
     K = 150
     i = 0
 
     for batch_i in tqdm(batch_paths):
-        x, y, classes = next(gen_paper(emb_node, batch_i))
-        if len(y) > 0:
-            batch_x.append(x)
-            batch_y.append(y.tolist())
-            batch_classes.append(classes)
+        x, y = next(gen_paper(emb_node, batch_i))
         # avoid empty answers
-        if len(batch_x) > 39:
-            batch_x_arr = np.array(batch_x).astype('float32').reshape(-1, 200)
-            with tf.Session() as sess:
-                saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
-                all_vars = tf.trainable_variables()
-                node_pred = custom_Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10])
-                i_prediction = sess.run(node_pred(batch_x_arr)).reshape(len(batch_x), -1)
-            del batch_x_arr
-            # sort classes and output at the same time
-            # sorter = np.argsort(i_prediction, axis=1)[::-1][:, :K]  # reverse
-            # i_prediction = i_prediction[sorter]
-            # classes = np.array(batch_classes)[sorter]
-            # https://stackoverflow.com/questions/33140674/argsort-for-a-multidimensional-ndarray
-            # https://stackoverflow.com/questions/20103779/index-2d-numpy-array-by-a-2d-array-of-indices-without-loops
-            new_sorter = i_prediction.argsort(axis=1)[::-1][:, :K]  # sort and select first 150
-            classes = np.take_along_axis(np.array(batch_classes), new_sorter, axis=1)
-            ans.extend(batch_y)
-            rs.extend(classes.tolist())
-            batch_x, batch_y, batch_classes = [], [], []  # reset
-            del i_prediction, new_sorter, classes
+        if len(y) > 0:
+            batch_x.extend(x)
+            batch_y.append(y.tolist())
+            # batch_classes.append(candidate_ids)
 
-            # calculate accuracy
-            # 只算答案是1的部分，看model有沒有train起來
-            # ans_len = y.shape[0]
-            # i_acc = np.sum(np.isin(classes[:ans_len], y)) / ans_len
-            # acc = (acc + i_acc) / len(ans)
+        # if len(batch_x) > 9:
+        #     batch_x_arr = np.array(batch_x)
+        #     classes = make_prediction(batch_x_arr)
+        #     del batch_x_arr
+        #     ans.extend(batch_y)
+        #     rs.extend(classes.tolist())
+        #     batch_x, batch_y, batch_classes = [], [], []  # reset
+
+    # 先把所有 pair分批產好並存到disk, 之後再做 predict
+    print(batch_x.nbytes)
+    np.save('npy_temp/batch300_x_emb.npy', np.array(batch_x))
+    np.save('npy_temp/batch300_y_label.npy', np.array(batch_y))
 
     # calculate MAP
-    print(metrics.mapk(ans, rs, K))
-    # print(acc)
+    # print(metrics.mapk(ans, rs, K))
 
 
 # check graphsage dnn
