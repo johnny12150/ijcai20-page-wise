@@ -4,8 +4,10 @@ import numpy as np
 from tqdm import tqdm
 import ml_metrics as metrics
 from model.baseline.graphsage_dnn.Layers import custom_Dense
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-task = 1
+task = 0
 with open('F:/volume/0217graphsage/0106/all_edge.pkl', 'rb') as file:
     all_edge = pickle.load(file)
 
@@ -67,13 +69,6 @@ all_vars = tf.trainable_variables()
 # call layer with saved weights
 node_pred = custom_Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10])
 
-# sample = np.zeros((2, 200)).astype('float32')
-# node_preds = node_pred(sample)
-# print(node_preds.eval(session=sess))
-
-# print(np.where(emb_node == 1))  # where is the paper id
-# print(paper_emb[np.where(emb_node == 1)[0]][0].shape)  # get emb by paper id
-
 
 # create paper pair
 def gen_paper(nodes, batch_i):
@@ -81,7 +76,6 @@ def gen_paper(nodes, batch_i):
     index_i = np.where(emb_node == batch_i)[0]
     paper_i_emb = paper_emb[index_i]
     # exclude_i = np.delete(paper_emb, index_i, axis=0)  # exclude row i
-    # todo 考慮不排除自己
     # paper_i_pair = np.array([paper_i_emb.tolist(), ] * (n_times-1))  # repeat rows
     # paper_i_pair = np.concatenate((paper_i_pair, exclude_i), axis=1)
     # exclude_i = np.delete(candidate_paper_emb, index_i, axis=0)
@@ -98,9 +92,10 @@ def gen_paper(nodes, batch_i):
 
 
 if task == 0:
+    sess.close()
     # to reduce memory usage, use batch prediction
     # batch_paths = np.random.choice(emb_node, size=emb_node.shape[0])
-    batch_paths = np.random.choice(emb_node, size=100)
+    batch_paths = np.random.choice(head_paper_ids, size=400)
     ans = []
     rs = []
     batch_x, batch_y, batch_classes = [], [], []
@@ -108,7 +103,6 @@ if task == 0:
     K = 150
     i = 0
 
-    # todo batch_path 應該只考慮有出現在 head的paper
     for batch_i in tqdm(batch_paths):
         x, y, classes = next(gen_paper(emb_node, batch_i))
         if len(y) > 0:
@@ -116,9 +110,13 @@ if task == 0:
             batch_y.append(y.tolist())
             batch_classes.append(classes)
         # avoid empty answers
-        if len(batch_x) > 4:
+        if len(batch_x) > 39:
             batch_x_arr = np.array(batch_x).astype('float32').reshape(-1, 200)
-            i_prediction = sess.run(node_pred(batch_x_arr)).reshape(len(batch_x), -1)
+            with tf.Session() as sess:
+                saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
+                all_vars = tf.trainable_variables()
+                node_pred = custom_Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10])
+                i_prediction = sess.run(node_pred(batch_x_arr)).reshape(len(batch_x), -1)
             del batch_x_arr
             # sort classes and output at the same time
             # sorter = np.argsort(i_prediction, axis=1)[::-1][:, :K]  # reverse
@@ -131,6 +129,7 @@ if task == 0:
             ans.extend(batch_y)
             rs.extend(classes.tolist())
             batch_x, batch_y, batch_classes = [], [], []  # reset
+            del i_prediction, new_sorter, classes
 
             # calculate accuracy
             # 只算答案是1的部分，看model有沒有train起來
@@ -140,7 +139,7 @@ if task == 0:
 
     # calculate MAP
     print(metrics.mapk(ans, rs, K))
-    print(acc)
+    # print(acc)
 
 
 # check graphsage dnn
@@ -181,16 +180,17 @@ def sage_nn(nodes, save=True):
     return np.array(x), np.array(y)
 
 
-x, y = sage_nn(head_paper_ids)
-# shuffle x, y
-# p = np.random.permutation(len(x))
-# x, y = x[p], y[p]
-y_logit = y.astype('float32').reshape(-1, 1)
-prediction_logit = sess.run(node_pred(x.astype('float32')))  # predict
-loss = sess.run(tf.nn.sigmoid_cross_entropy_with_logits(logits=prediction_logit, labels=y_logit))
-print(np.sum(loss.reshape(-1))/ len(loss))
-prediction = sess.run(tf.nn.sigmoid(prediction_logit))
-prediction = np.round(prediction.reshape(-1))  # flatten & to 0/ 1
-print(np.sum(np.equal(prediction, y))/ len(y))
+if task == 1:
+    x, y = sage_nn(head_paper_ids)
+    # shuffle x, y
+    # p = np.random.permutation(len(x))
+    # x, y = x[p], y[p]
+    y_logit = y.astype('float32').reshape(-1, 1)
+    prediction_logit = sess.run(node_pred(x.astype('float32')))  # predict
+    loss = sess.run(tf.nn.sigmoid_cross_entropy_with_logits(logits=prediction_logit, labels=y_logit))
+    print(np.sum(loss.reshape(-1))/ len(loss))
+    prediction = sess.run(tf.nn.sigmoid(prediction_logit))
+    prediction = np.round(prediction.reshape(-1))  # flatten & to 0/ 1
+    print(np.sum(np.equal(prediction, y))/ len(y))
 
 
