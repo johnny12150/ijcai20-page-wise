@@ -95,7 +95,7 @@ def make_prediction(x):
         saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
         all_vars = tf.trainable_variables()
         node_pred = custom_Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10])
-        i_prediction = sess.run(tf.nn.sigmoid(node_pred(x))).reshape(-1, len(candidate_ids))
+        i_prediction = sess.run(tf.nn.sigmoid(node_pred(x))).reshape(len(x), -1)
     # sort classes and output at the same time
     # sorter = np.argsort(i_prediction, axis=1)[::-1][:, :K]  # reverse
     # i_prediction = i_prediction[sorter]
@@ -103,7 +103,8 @@ def make_prediction(x):
     # https://stackoverflow.com/questions/33140674/argsort-for-a-multidimensional-ndarray
     # https://stackoverflow.com/questions/20103779/index-2d-numpy-array-by-a-2d-array-of-indices-without-loops
     new_sorter = i_prediction.argsort(axis=1)[::-1][:, :K]  # sort and select first 150
-    classes = np.take_along_axis(np.array(batch_classes), new_sorter, axis=1)
+    batch_classes = np.tile(candidate_ids, (len(x), 1))
+    classes = np.take_along_axis(batch_classes, new_sorter, axis=1)
     return classes
 
 
@@ -112,11 +113,10 @@ if task == 0:
     # to reduce memory usage, use batch prediction
     # batch_paths = np.random.choice(emb_node, size=emb_node.shape[0])
     # batch_paths = np.random.choice(head_paper_ids, size=300)
-    batch_paths = head_paper_ids[:300]
+    batch_paths = head_paper_ids[:30]
     ans = []
     rs = []
-    # todo 直接用np zeros避免list轉arr要耗額外的ram
-    batch_x, batch_y, batch_classes = [], [], []
+    batch_x, batch_y = [], []
     K = 150
     i = 0
 
@@ -124,20 +124,20 @@ if task == 0:
         x, y = next(gen_paper(emb_node, batch_i))
         # avoid empty answers
         if len(y) > 0:
-            batch_x.extend(x)
+            batch_x.append(x)
             batch_y.append(y.tolist())
-            # batch_classes.append(candidate_ids)
 
-        # if len(batch_x) > 9:
-        #     batch_x_arr = np.array(batch_x)
-        #     classes = make_prediction(batch_x_arr)
-        #     del batch_x_arr
-        #     ans.extend(batch_y)
-        #     rs.extend(classes.tolist())
-        #     batch_x, batch_y, batch_classes = [], [], []  # reset
+        if len(batch_x) > 9:
+            batch_x_arr = np.array(batch_x)
+            classes = make_prediction(batch_x_arr)  # shape: len(x) * K
+            del batch_x_arr
+            ans.extend(batch_y)
+            rs.extend(classes.tolist())
+            batch_x, batch_y = [], []  # reset
+
+        # batch_classes.append(candidate_ids)
 
     # 先把所有 pair分批產好並存到disk, 之後再做 predict
-    print(batch_x.nbytes)
     np.save('npy_temp/batch300_x_emb.npy', np.array(batch_x))
     np.save('npy_temp/batch300_y_label.npy', np.array(batch_y))
 
