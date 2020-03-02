@@ -41,9 +41,10 @@ candidate_paper_emb = paper_emb[c_index]
 tf.reset_default_graph()
 saver = tf.train.import_meta_graph('F:/volume/0217graphsage/0106/model_output/model.meta')
 # https://stackoverflow.com/questions/44251328/tensorflow-print-all-placeholder-variable-names-from-meta-graph
-imported_graph = tf.get_default_graph()
-graph_op = imported_graph.get_operations()
+# imported_graph = tf.get_default_graph()
+# graph_op = imported_graph.get_operations()
 # print([x for x in tf.get_default_graph().get_operations() if x.type == "Placeholder"])
+# print([x for x in tf.get_default_graph().get_operations() if "dense_1_vars" in x.name and x.type == 'VariableV2'])
 
 # with open('./model/baseline/NN_weights.txt', 'w') as f:
 #     for i in graph_op:
@@ -66,8 +67,23 @@ saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
 all_vars = tf.trainable_variables()
 # print(all_vars[6].name)
 # print(sess.run(all_vars[6]).shape)
-# call layer with saved weights
-node_pred = custom_Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10])
+
+
+def recommender(weights, bias, inputs, sigmoid=True):
+    # transform
+    hidden_1 = tf.matmul(inputs, weights[0])
+    hidden_1 += bias[0]
+    hidden_1 = tf.nn.relu(hidden_1)
+    hidden_2 = tf.matmul(hidden_1, weights[1])
+    hidden_2 += bias[1]
+    hidden_2 = tf.nn.relu(hidden_2)
+    hidden_3 = tf.matmul(hidden_2, weights[2])
+    hidden_3 += bias[2]
+    if sigmoid:
+        output = tf.nn.sigmoid(hidden_3)
+    else:
+        output = hidden_3
+    return output
 
 
 # create paper pair
@@ -77,25 +93,31 @@ def gen_paper(batch_i):
     # exclude_i = np.delete(paper_emb, index_i, axis=0)  # exclude row i
     # paper_i_pair = np.array([paper_i_emb.tolist(), ] * (n_times-1))  # repeat rows
     paper_i_pair = np.tile(paper_i_emb, (len(candidate_ids))).reshape(-1, 100)  # repeat rows
-    candidates = np.tile(candidate_paper_emb, (len(batch_i))).reshape(-1, 100)
+    candidates = np.tile(candidate_paper_emb, (len(batch_i))).reshape(-1, 100)  # repeat candidate_ids
     paper_i_pair = np.concatenate((paper_i_pair, candidates), axis=1)  # shape: N * len(candidate_ids) * 200
     batch_y = []
     for j in batch_i:
         batch_y.append(all_paper[all_paper['head'] == j]['tail'].tolist())  # find tail ids
-    # batch_y = all_paper[all_paper['head'].isin(batch_i)]['tail'].values  # for multi paper id
 
     # prediction
     classes = make_prediction(paper_i_pair, len(batch_i))  # shape: len(x) * K
     yield classes, batch_y
 
 
-# todo 用同樣資料跑預測看會不會增加ram的使用
 def make_prediction(x, size):
     with tf.Session() as sess:
         saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
-        all_vars = tf.trainable_variables()
-        node_pred = custom_Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10])
+        # all_vars = tf.trainable_variables()
+        # node_pred = custom_Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10])
+        # use tensor_board to check nodes
+        # writer = tf.summary.FileWriter("TensorBoard/", graph=sess.graph)
+        print(x.nbytes / 10 ** 9)
         i_prediction = sess.run(tf.nn.sigmoid(node_pred(x))).reshape(size, -1)
+        # fixme: use name scope to get var instead
+        # i_prediction = sess.run(recommender([all_vars[5], all_vars[6], all_vars[7]], [all_vars[8], all_vars[9], all_vars[10]], x))
+        # i_prediction = i_prediction.reshape(size, -1)
+        # print(len([n.name for n in tf.get_default_graph().as_graph_def().node]))  # check tf graph size
+
     # sort classes and output at the same time
     # https://stackoverflow.com/questions/33140674/argsort-for-a-multidimensional-ndarray
     # https://stackoverflow.com/questions/20103779/index-2d-numpy-array-by-a-2d-array-of-indices-without-loops
@@ -108,14 +130,14 @@ def make_prediction(x, size):
 if task == 0:
     sess.close()
     # to reduce memory usage, use batch prediction
-    # batch_paths = np.random.choice(emb_node, size=emb_node.shape[0])
     # batch_paths = np.random.choice(head_paper_ids, size=300)
     ans = []
     rs = []
     K = 150
 
-    for i in tqdm(range(10)):
+    for i in tqdm(range(20)):
         batch_paths = head_paper_ids[i*20:(i+1)*20]  # 一次處理20筆
+        node_pred = custom_Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10])
         pred, y_label = next(gen_paper(batch_paths))
         # todo save ans & rs at each batch
         ans.extend(y_label)
@@ -125,8 +147,8 @@ if task == 0:
     print(metrics.mapk(ans, rs, K))
 
     # 先把所有 pair分批產好並存到disk, 之後再做 predict
-    np.save('npy_temp/batch300_x_emb.npy', np.array(batch_x))
-    np.save('npy_temp/batch300_y_label.npy', np.array(batch_y))
+    # np.save('npy_temp/batch300_x_emb.npy', np.array(batch_x))
+    # np.save('npy_temp/batch300_y_label.npy', np.array(batch_y))
 
 
 # check graphsage dnn
@@ -168,6 +190,8 @@ def sage_nn(nodes, save=True):
 
 
 if task == 1:
+    # call layer with saved weights
+    node_pred = custom_Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10])
     x, y = sage_nn(head_paper_ids)
     # shuffle x, y
     # p = np.random.permutation(len(x))

@@ -87,6 +87,7 @@ class custom_Dense(Layer):
         self.sparse_inputs = sparse_inputs
         if sparse_inputs:
             self.num_features_nonzero = placeholders['num_features_nonzero']
+        #  fixme: 應該直接存session裡面取, 而不是assign
         '''用tf.variable_scope才可以重複使用變量'''
         with tf.variable_scope(self.name + '_vars'):
             self.vars['weights'] = w0
