@@ -59,6 +59,7 @@ sess = tf.Session()
 # sess.run(tf.global_variables_initializer())
 saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
 # saver.restore(sess, tf.train.latest_checkpoint('F:/volume/0217graphsage/0106/model_output'))
+# todo restore list of variables
 
 # print(imported_graph.get_tensor_by_name('Placeholder:0'))
 # print(imported_graph.get_operation_by_name('Placeholder'))
@@ -87,7 +88,7 @@ def recommender(weights, bias, inputs, sigmoid=True):
 
 
 # create paper pair
-def gen_paper(batch_i):
+def gen_paper(batch_i, pred=True):
     index_i = np.where(np.in1d(emb_node, batch_i))[0]
     paper_i_emb = paper_emb[index_i]
     # exclude_i = np.delete(paper_emb, index_i, axis=0)  # exclude row i
@@ -99,9 +100,21 @@ def gen_paper(batch_i):
     for j in batch_i:
         batch_y.append(all_paper[all_paper['head'] == j]['tail'].tolist())  # find tail ids
 
-    # prediction
-    classes = make_prediction(paper_i_pair, len(batch_i))  # shape: len(x) * K
-    yield classes, batch_y
+    if pred:
+        # prediction
+        classes = make_prediction(paper_i_pair, len(batch_i))  # shape: len(x) * K
+        yield classes, batch_y
+    else:
+        yield paper_i_pair, batch_y
+
+
+def load_paper_pair(path):
+    paper_size = 60
+    end = paper_size * len(candidate_ids)
+    batch_x = np.load(path[0], allow_pickle=True)[:end]
+    batch_ans = np.load(path[1], allow_pickle=True)[:end].tolist()
+    batch_pred = make_prediction(batch_x, paper_size).tolist()
+    print(metrics.mapk(batch_ans, batch_pred, 150))
 
 
 def make_prediction(x, size):
@@ -113,9 +126,6 @@ def make_prediction(x, size):
         # writer = tf.summary.FileWriter("TensorBoard/", graph=sess.graph)
         print(x.nbytes / 10 ** 9)
         i_prediction = sess.run(tf.nn.sigmoid(node_pred(x))).reshape(size, -1)
-        # fixme: use name scope to get var instead
-        # i_prediction = sess.run(recommender([all_vars[5], all_vars[6], all_vars[7]], [all_vars[8], all_vars[9], all_vars[10]], x))
-        # i_prediction = i_prediction.reshape(size, -1)
         # print(len([n.name for n in tf.get_default_graph().as_graph_def().node]))  # check tf graph size
 
     # sort classes and output at the same time
@@ -134,21 +144,28 @@ if task == 0:
     ans = []
     rs = []
     K = 150
+    batch_size = 20
 
-    for i in tqdm(range(20)):
-        batch_paths = head_paper_ids[i*20:(i+1)*20]  # 一次處理20筆
-        node_pred = custom_Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10])
-        pred, y_label = next(gen_paper(batch_paths))
-        # todo save ans & rs at each batch
-        ans.extend(y_label)
-        rs.extend(pred.tolist())
+    # fixme: use name scope to get var instead
+    node_pred = custom_Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10])
+    # for i in tqdm(range(20)):
+    #     batch_paths = head_paper_ids[i*batch_size:(i+1)*batch_size]  # 一次處理20筆
+    #     pred, y_label = next(gen_paper(batch_paths))
+    #     # todo save ans & rs at each batch
+    #     ans.extend(y_label)
+    #     rs.extend(pred.tolist())
 
     # calculate MAP
-    print(metrics.mapk(ans, rs, K))
+    # print(metrics.mapk(ans, rs, K))
 
-    # 先把所有 pair分批產好並存到disk, 之後再做 predict
-    # np.save('npy_temp/batch300_x_emb.npy', np.array(batch_x))
-    # np.save('npy_temp/batch300_y_label.npy', np.array(batch_y))
+    # for j in tqdm(range(20)):
+        # 先把所有 pair分批產好並存到disk, 之後再做 predict
+        # np.save('npy_temp/batch'+str(batch_size)+'_x_emb.npy', np.array(batch_x))
+        # np.save('npy_temp/batch'+str(batch_size)+'_y_label.npy', np.array(batch_y))
+
+    # todo test這300篇的MAP
+    paths = ['npy_temp/batch300_x_emb.npy', 'npy_temp/batch300_y_label.npy']
+    load_paper_pair(paths)
 
 
 # check graphsage dnn
@@ -203,5 +220,4 @@ if task == 1:
     prediction = sess.run(tf.nn.sigmoid(prediction_logit))
     prediction = np.round(prediction.reshape(-1))  # flatten & to 0/ 1
     print(np.sum(np.equal(prediction, y))/ len(y))
-
 
