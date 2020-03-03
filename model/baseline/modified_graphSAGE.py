@@ -3,7 +3,7 @@ import tensorflow as tf
 import numpy as np
 from tqdm import tqdm
 import ml_metrics as metrics
-from model.baseline.graphsage_dnn.Layers import custom_Dense
+from model.baseline.graphsage_dnn.Layers import custom_Dense, zeros
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
@@ -39,7 +39,15 @@ candidate_paper_emb = paper_emb[c_index]
 
 # use trained tf NN to predict cite or not
 tf.reset_default_graph()
-saver = tf.train.import_meta_graph('F:/volume/0217graphsage/0106/model_output/model.meta')
+# saver = tf.train.import_meta_graph('F:/volume/0217graphsage/0106/model_output/model.meta')  # restore all
+w0 = tf.get_variable('dense_1_vars/weights', shape=(200, 50))  # define variables that we want
+w1 = tf.get_variable('dense_1_vars/weights_1', shape=(50, 50))
+w2 = tf.get_variable('dense_1_vars/weights_2', shape=(50, 1))
+b0 = zeros(50, 'dense_1_vars/bias')
+b1 = zeros(50, 'dense_1_vars/bias_1')
+b2 = zeros(1, 'dense_1_vars/bias_2')
+saver = tf.train.Saver()
+
 # https://stackoverflow.com/questions/44251328/tensorflow-print-all-placeholder-variable-names-from-meta-graph
 # imported_graph = tf.get_default_graph()
 # graph_op = imported_graph.get_operations()
@@ -59,7 +67,6 @@ sess = tf.Session()
 # sess.run(tf.global_variables_initializer())
 saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
 # saver.restore(sess, tf.train.latest_checkpoint('F:/volume/0217graphsage/0106/model_output'))
-# todo restore list of variables
 
 # print(imported_graph.get_tensor_by_name('Placeholder:0'))
 # print(imported_graph.get_operation_by_name('Placeholder'))
@@ -147,25 +154,25 @@ if task == 0:
     batch_size = 20
 
     # fixme: use name scope to get var instead
-    node_pred = custom_Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10])
-    # for i in tqdm(range(20)):
-    #     batch_paths = head_paper_ids[i*batch_size:(i+1)*batch_size]  # 一次處理20筆
-    #     pred, y_label = next(gen_paper(batch_paths))
-    #     # todo save ans & rs at each batch
-    #     ans.extend(y_label)
-    #     rs.extend(pred.tolist())
+    node_pred = custom_Dense(w0, w1, w2, b0, b1, b2)
+    for i in tqdm(range(20)):
+        batch_paths = head_paper_ids[i*batch_size:(i+1)*batch_size]  # 一次處理20筆
+        pred, y_label = next(gen_paper(batch_paths))
+        # todo save ans & rs at each batch
+        ans.extend(y_label)
+        rs.extend(pred.tolist())
 
     # calculate MAP
-    # print(metrics.mapk(ans, rs, K))
+    print(metrics.mapk(ans, rs, K))
 
     # for j in tqdm(range(20)):
         # 先把所有 pair分批產好並存到disk, 之後再做 predict
         # np.save('npy_temp/batch'+str(batch_size)+'_x_emb.npy', np.array(batch_x))
         # np.save('npy_temp/batch'+str(batch_size)+'_y_label.npy', np.array(batch_y))
 
-    # todo test這300篇的MAP
-    paths = ['npy_temp/batch300_x_emb.npy', 'npy_temp/batch300_y_label.npy']
-    load_paper_pair(paths)
+    # test這300篇的MAP
+    # paths = ['npy_temp/batch300_x_emb.npy', 'npy_temp/batch300_y_label.npy']
+    # load_paper_pair(paths)
 
 
 # check graphsage dnn
