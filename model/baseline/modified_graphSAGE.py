@@ -37,45 +37,6 @@ paper_emb = paper_emb[index].astype('float32')
 c_index = np.where(np.in1d(emb_node, candidate_ids))
 candidate_paper_emb = paper_emb[c_index]
 
-# use trained tf NN to predict cite or not
-tf.reset_default_graph()
-# saver = tf.train.import_meta_graph('F:/volume/0217graphsage/0106/model_output/model.meta')  # restore all
-w0 = tf.get_variable('dense_1_vars/weights', shape=(200, 50))  # define variables that we want
-w1 = tf.get_variable('dense_1_vars/weights_1', shape=(50, 50))
-w2 = tf.get_variable('dense_1_vars/weights_2', shape=(50, 1))
-b0 = zeros(50, 'dense_1_vars/bias')
-b1 = zeros(50, 'dense_1_vars/bias_1')
-b2 = zeros(1, 'dense_1_vars/bias_2')
-saver = tf.train.Saver()
-
-# https://stackoverflow.com/questions/44251328/tensorflow-print-all-placeholder-variable-names-from-meta-graph
-# imported_graph = tf.get_default_graph()
-# graph_op = imported_graph.get_operations()
-# print([x for x in tf.get_default_graph().get_operations() if x.type == "Placeholder"])
-# print([x for x in tf.get_default_graph().get_operations() if "dense_1_vars" in x.name and x.type == 'VariableV2'])
-
-# with open('./model/baseline/NN_weights.txt', 'w') as f:
-#     for i in graph_op:
-#         f.write(str(i))
-
-# graph_b0 = imported_graph.get_operation_by_name('dense_1_vars/bias')
-# graph_b1 = imported_graph.get_operation_by_name('dense_1_vars/bias_1')
-# print(graph_b0.values())
-
-# https://stackoverflow.com/questions/42769435/get-variable-does-not-work-after-session-restoration
-sess = tf.Session()
-# sess.run(tf.global_variables_initializer())
-saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
-# saver.restore(sess, tf.train.latest_checkpoint('F:/volume/0217graphsage/0106/model_output'))
-
-# print(imported_graph.get_tensor_by_name('Placeholder:0'))
-# print(imported_graph.get_operation_by_name('Placeholder'))
-
-# get weight, https://ithelp.ithome.com.tw/articles/10187786
-all_vars = tf.trainable_variables()
-# print(all_vars[6].name)
-# print(sess.run(all_vars[6]).shape)
-
 
 def recommender(weights, bias, inputs, sigmoid=True):
     # transform
@@ -124,28 +85,35 @@ def load_paper_pair(path):
     print(metrics.mapk(batch_ans, batch_pred, 150))
 
 
+# use trained tf NN to predict cite or not
 def make_prediction(x, size):
-    with tf.Session() as sess:
-        saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
-        # all_vars = tf.trainable_variables()
-        # node_pred = custom_Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10])
-        # use tensor_board to check nodes
-        # writer = tf.summary.FileWriter("TensorBoard/", graph=sess.graph)
-        print(x.nbytes / 10 ** 9)
-        i_prediction = sess.run(tf.nn.sigmoid(node_pred(x))).reshape(size, -1)
-        # print(len([n.name for n in tf.get_default_graph().as_graph_def().node]))  # check tf graph size
+    with tf.Graph().as_default():
+        w0 = tf.get_variable('dense_1_vars/weights', shape=(200, 50))  # define variables that we want
+        w1 = tf.get_variable('dense_1_vars/weights_1', shape=(50, 50))
+        w2 = tf.get_variable('dense_1_vars/weights_2', shape=(50, 1))
+        b0 = zeros(50, 'dense_1_vars/bias')
+        b1 = zeros(50, 'dense_1_vars/bias_1')
+        b2 = zeros(1, 'dense_1_vars/bias_2')
+        saver = tf.train.Saver()
+        with tf.Session() as sess:
+            saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
+            node_pred = custom_Dense(w0, w1, w2, b0, b1, b2)
+            # use tensor_board to check nodes
+            # writer = tf.summary.FileWriter("TensorBoard/", graph=sess.graph)
+            # print(x.nbytes / 10 ** 9)
+            i_prediction = sess.run(tf.nn.sigmoid(node_pred(x))).reshape(size, -1)
+            # print(len([n.name for n in tf.get_default_graph().as_graph_def().node]))  # check tf graph size
 
-    # sort classes and output at the same time
-    # https://stackoverflow.com/questions/33140674/argsort-for-a-multidimensional-ndarray
-    # https://stackoverflow.com/questions/20103779/index-2d-numpy-array-by-a-2d-array-of-indices-without-loops
-    new_sorter = i_prediction.argsort(axis=1)[::-1][:, :K]  # sort and select first 150
-    batch_classes = np.tile(candidate_ids, (size, 1))  # shape: N * len(candidate_ids)
-    classes = np.take_along_axis(batch_classes, new_sorter, axis=1)
+        # sort classes and output at the same time
+        # https://stackoverflow.com/questions/33140674/argsort-for-a-multidimensional-ndarray
+        # https://stackoverflow.com/questions/20103779/index-2d-numpy-array-by-a-2d-array-of-indices-without-loops
+        new_sorter = i_prediction.argsort(axis=1)[::-1][:, :K]  # sort and select first 150
+        batch_classes = np.tile(candidate_ids, (size, 1))  # shape: N * len(candidate_ids)
+        classes = np.take_along_axis(batch_classes, new_sorter, axis=1)
     return classes
 
 
 if task == 0:
-    sess.close()
     # to reduce memory usage, use batch prediction
     # batch_paths = np.random.choice(head_paper_ids, size=300)
     ans = []
@@ -153,9 +121,7 @@ if task == 0:
     K = 150
     batch_size = 20
 
-    # fixme: use name scope to get var instead
-    node_pred = custom_Dense(w0, w1, w2, b0, b1, b2)
-    for i in tqdm(range(20)):
+    for i in tqdm(range(50)):
         batch_paths = head_paper_ids[i*batch_size:(i+1)*batch_size]  # 一次處理20筆
         pred, y_label = next(gen_paper(batch_paths))
         # todo save ans & rs at each batch
@@ -214,8 +180,13 @@ def sage_nn(nodes, save=True):
 
 
 if task == 1:
+    tf.reset_default_graph()
+    saver = tf.train.import_meta_graph('F:/volume/0217graphsage/0106/model_output/model.meta')  # restore all
+    sess = tf.Session()
+    saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
+    all_vars = tf.trainable_variables()
     # call layer with saved weights
-    node_pred = custom_Dense(all_vars[5], all_vars[6], all_vars[7], all_vars[8], all_vars[9], all_vars[10])
+    node_pred = custom_Dense(w0, w1, w2, b0, b1, b2)
     x, y = sage_nn(head_paper_ids)
     # shuffle x, y
     # p = np.random.permutation(len(x))
@@ -227,4 +198,5 @@ if task == 1:
     prediction = sess.run(tf.nn.sigmoid(prediction_logit))
     prediction = np.round(prediction.reshape(-1))  # flatten & to 0/ 1
     print(np.sum(np.equal(prediction, y))/ len(y))
+    sess.close()
 
