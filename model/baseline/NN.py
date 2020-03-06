@@ -14,9 +14,13 @@ from collections import Counter
 from sklearn import preprocessing
 from keras.models import Model, load_model
 from keras.layers import Input, Dense, BatchNormalization
+from model.baseline.eval_metrics import show_average_results
+# import tensorflow as tf
+# from model.baseline.graphsage_dnn.Layers import custom_Dense
+
 
 os.environ["PATH"] += os.pathsep + 'C:/Users/Wade/Anaconda3/Library/bin/graphviz'
-
+train = False
 bert_title = 768
 bert_abstract = 768
 emb_dim = 100  # output dim (就是graph embedding後的dim)
@@ -27,7 +31,7 @@ dblp_remain = pd.read_csv('preprocess/edge/dblp_remain_references.csv')  # refer
 dblp_remain = dblp_remain.loc[dblp_remain.references_amount > 0]  # 留有ref的
 dblp_remain['paper_id'] = dblp_remain.paper_id.map(comparison)  # 將舊id換成新的, map is much faster than using replace
 dblp_remain['paper_references'] = dblp_remain.paper_references.apply(lambda x: list(map(comparison.get, list(map(int, ast.literal_eval(x))))))
-remain_paper = dblp_top50.loc[(dblp_top50.new_papr_id.isin(dblp_remain.paper_id.values)) & (dblp_top50.time_step < 284)].new_papr_id.values  # 2018AAAI以前
+# remain_paper = dblp_top50.loc[(dblp_top50.new_papr_id.isin(dblp_remain.paper_id.values)) & (dblp_top50.time_step < 284)].new_papr_id.values  # 2018AAAI以前
 dblp_top50_conf = pd.read_pickle('preprocess/edge/paper_venue.pkl')
 dblp_top50_test = dblp_top50_conf.copy()
 pa = pd.read_pickle('preprocess/edge/p_a_before284_delete_author.pkl')
@@ -98,7 +102,6 @@ def generate_hot(data, k=150, threshlod=10):
 
 # 產生hot
 hot, recPool = generate_hot(dblp_remain.paper_references, threshlod=5)
-
 # testing hot
 paper284_ids = np.append(train2017.new_papr_id.values, test2018.new_papr_id.values)
 hot284 = dblp_remain[dblp_remain['paper_id'].isin(paper284_ids)].paper_references
@@ -191,8 +194,6 @@ def data_generator(emb, pIds, pool, method, save=True, load=False):
 
 # first time generate data, may cause 1 hour
 paper_pool = train2017[train2017.new_papr_id.isin(recPool)]
-# x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2017, paper_pool, 'GraphSAGE')
-# x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2017, paper_pool, 'DeepWalk')
 
 # load previous results
 x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2017, paper_pool, 'GraphSAGE', load=True)
@@ -221,7 +222,6 @@ def train_model(x, y, batch=1024, save=False):
 
     if save:
         # save model
-        # model.save('model/hdf5/model_deepwalk_BN.h5')
         model.save('model/hdf5/model_gSAGE_BN.h5')
     return model, train_history
 
@@ -245,17 +245,16 @@ def show_train_history(train_history, train, validation):
     plt.show()
 
 
-model, train_history = train_model(x_train, paper_emb_train)
-show_train_history(train_history, 'loss', 'val_loss')
-
+if train:
+    model, train_history = train_model(x_train, paper_emb_train, save=True)
+    show_train_history(train_history, 'loss', 'val_loss')
 
 batch = 1024
 # test_history = model.evaluate_generator(embedding_loader(line_emb, test2018.new_papr_id.values, all=0), steps=test2018.shape[0]/ batch)
 
 
-# fixme np.unique 回傳的會由小排到大
 def rec(all, targets, pred, t='train', emb='GraphSAGE'):
-    indexes = np.unique(targets, return_index=True)[1]
+    indexes = np.unique(targets, return_index=True)[1]  # np.unique 回傳的會由小排到大
     targets = np.array([targets[index] for index in sorted(indexes)])
 
     if emb == 'GraphSAGE':
@@ -305,13 +304,13 @@ def prepare_data(t='train', emb='GraphSAGE', save=True, load=False):
         np.save('model/baseline/tmp/'+t+'/sort_y.npy', sort_y)
         np.save('model/baseline/tmp/'+t+'/x_all.npy', x_all)
         np.save('model/baseline/tmp/'+t+'/paper_emb.npy', paper_emb)
-    return sort_y, x_all, paper_emb, predictions, rec(paper_emb_all, y_all, predictions, t=t)
+    return sort_y, x_all, paper_emb, predictions
 
 
 K = 150
-# sort_y, x_all, paper_emb, predictions = prepare_data()  # train
 # sort_y, x_all, paper_emb, predictions, recommend_papers = prepare_data(t='test')
-sort_y, x_all, paper_emb, predictions, recommend_papers = prepare_data(t='test', load=True)
+sort_y, x_all, paper_emb, predictions = prepare_data(t='test', load=True)
+recommend_papers = rec(paper_emb_all, y_all, predictions, t='test')
 
 
 def knn_rec():
@@ -335,13 +334,10 @@ def knn_rec():
         i += 1
 
 
-# dot for graphSAGE
-# graph_scores = np.dot(paper_emb_all, paper_emb.T)  # train only
-# graph_recommend_papers = y_all[np.argsort(graph_scores, axis=0)[::-1]][1:K+1]
-
-# cosine for deepwalk
-cos_graph = cosine_similarity(paper_emb_all, paper_emb)
-graph_recommend_papers = y_all[np.argsort(cos_graph, axis=0)[::-1]][1:K+1]
+if train:
+    # cosine for deepwalk
+    cos_graph = cosine_similarity(paper_emb_all, paper_emb)
+    graph_recommend_papers = y_all[np.argsort(cos_graph, axis=0)[::-1]][1:K+1]
 cos = np.dot(paper_emb_all, predictions.T)
 recommend_papers = y_all[np.argsort(cos, axis=0)[::-1]][:K]
 
@@ -349,6 +345,7 @@ recommend_papers = y_all[np.argsort(cos, axis=0)[::-1]][:K]
 def generate_ans(data, t='train'):
     if t == 'train':
         # ans = paper_refs[paper_refs.new_papr_id.isin(data['new_papr_id'].values), 'join'].apply(lambda x: list(map(int, x.split(','))))
+        # fixme follow test below
         ans_t = paper_refs[paper_refs.new_papr_id.isin(data), 'join']
         ans = ans_t.apply(lambda x: list(map(int, x.split(','))))
     else:
@@ -361,10 +358,11 @@ def generate_ans(data, t='train'):
 # ans = paper_refs[paper_refs.new_papr_id.isin(train2017['new_papr_id'].values)]  # pp資料的答案
 # ansK = ans['join'].apply(lambda x: list(map(int, x.split(','))))
 # ansK = generate_ans(train2017)
-ansK = generate_ans(y_all)
-
-# testing 2018 AAAI
-test_ansK = generate_ans(sort_y, t='test')
+if train:
+    ansK = generate_ans(y_all)
+else:
+    # testing 2018 AAAI
+    test_ansK = generate_ans(sort_y, t='test')
 
 
 def _ark(actual, predicted, k=10):
@@ -419,16 +417,18 @@ def mark(actual, predicted, k=10):
     return np.mean([_ark(a,p,k) for a,p in zip(actual, predicted)])
 
 
-def metric_bar(hot, ansK, recommend, method='MAP', t='train', kList=(25, 50, 100, 150)):
+def metric_bar(hot, ansK, recommend, method='MAP', t='train', kList=(1, 5, 10, 25, 50, 100, 150)):
     for k in kList:
         if method == 'MAP':
-            plt.bar('Hot', metrics.mapk(ansK.tolist(), np.array([hot]*ansK.shape[0]).tolist(), k))
-            plt.bar('RS', metrics.mapk(ansK.tolist(), recommend.T.tolist(), k))
+            hot_metrics = metrics.mapk(ansK.tolist(), [hot]*ansK.shape[0], k)
+            rs_metrics = metrics.mapk(ansK.tolist(), recommend.T.tolist(), k)
+            plt.bar('Hot', hot_metrics)
+            plt.bar('RS', rs_metrics)
             if t == 'train':
                 plt.bar('GR', metrics.mapk(ansK.tolist(), graph_recommend_papers.T.tolist(), k))
         if method == 'Recall':
-            plt.bar('Hot', mark(ansK.values, np.array([hot]*ansK.shape[0]), k))
-            plt.bar('RS', mark(ansK.values, recommend.T, k))
+            plt.bar('Hot', mark(ansK, [hot]*ansK.shape[0], k))
+            plt.bar('RS', mark(ansK, recommend.T, k))
             if t == 'train':
                 plt.bar('GR', mark(ansK.values, graph_recommend_papers.T, k))
         plt.ylabel('score')
@@ -441,8 +441,12 @@ not_null = np.nonzero(test_ansK.values)
 test_ansK = test_ansK.values[not_null]
 recommend_papers = recommend_papers.T[not_null].T
 
-metric_bar(hot, ansK, recommend_papers)  # train MAP
-metric_bar(test_hot, test_ansK, recommend_papers, t='test', kList=[150])  # test MAP
-metric_bar(hot, ansK, recommend_papers, 'Recall')  # train Recall
-metric_bar(test_hot, test_ansK, recommend_papers, 'Recall', t='test', kList=[25, 50])  # test recall
+if train:
+    metric_bar(hot, ansK, recommend_papers)  # train MAP
+    metric_bar(hot, ansK, recommend_papers, 'Recall')  # train Recall
+else:
+    metric_bar(test_hot, test_ansK, recommend_papers, t='test')  # test MAP
+    metric_bar(test_hot, test_ansK, recommend_papers, 'Recall', t='test')  # test recall
+
+# todo use new eval_metrics
 
