@@ -21,6 +21,7 @@ from model.baseline.eval_metrics import show_average_results
 
 os.environ["PATH"] += os.pathsep + 'C:/Users/Wade/Anaconda3/Library/bin/graphviz'
 train = False
+GNN = 'graphSAGE'
 bert_title = 768
 bert_abstract = 768
 emb_dim = 100  # output dim (就是graph embedding後的dim)
@@ -334,12 +335,13 @@ def knn_rec():
         i += 1
 
 
-if train:
-    # cosine for deepwalk
-    cos_graph = cosine_similarity(paper_emb_all, paper_emb)
-    graph_recommend_papers = y_all[np.argsort(cos_graph, axis=0)[::-1]][1:K+1]
-cos = np.dot(paper_emb_all, predictions.T)
-recommend_papers = y_all[np.argsort(cos, axis=0)[::-1]][:K]
+if GNN == 'deepwalk':
+    if train:
+        # cosine for deepwalk
+        cos_graph = cosine_similarity(paper_emb_all, paper_emb)
+        graph_recommend_papers = y_all[np.argsort(cos_graph, axis=0)[::-1]][1:K+1]
+    cos = np.dot(paper_emb_all, predictions.T)
+    recommend_papers = y_all[np.argsort(cos, axis=0)[::-1]][:K]
 
 
 def generate_ans(data, t='train'):
@@ -433,7 +435,7 @@ def metric_bar(hot, ansK, recommend, method='MAP', t='train', kList=(1, 5, 10, 2
                 plt.bar('GR', mark(ansK.values, graph_recommend_papers.T, k))
         plt.ylabel('score')
         plt.title(t+' '+method+'@'+str(k))
-        plt.show()
+        # plt.show()
 
 
 # 找答案非空list的做testing, 避免MAP被灌水
@@ -447,6 +449,4 @@ if train:
 else:
     metric_bar(test_hot, test_ansK, recommend_papers, t='test')  # test MAP
     metric_bar(test_hot, test_ansK, recommend_papers, 'Recall', t='test')  # test recall
-
-# todo use new eval_metrics
-
+    show_average_results(test_ansK.tolist(), recommend_papers.T.tolist())
