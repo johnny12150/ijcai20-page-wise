@@ -59,7 +59,7 @@ dblp_top50_test['authors'] = pa_extra.groupby('new_papr_id')['new_author_id'].ap
 dblp_top50_test['references'] = dblp_top50[dblp_top50['new_papr_id'].isin(dblp_top50_test['new_papr_id'].values)]['references']
 dblp_top50_test.dropna(subset=['authors'], inplace=True)  # drop empty author papers
 dblp_top50_test = pd.DataFrame([np.append(row.values, d) for _, row in dblp_top50_test.iterrows() for d in row['authors']], columns=dblp_top50_test.columns.append(pd.Index(['new_first_aId'])))
-test2018 = dblp_top50_test.loc[dblp_top50_test.time_step == 284, ['new_papr_id', 'new_venue_id', 'new_first_aId', 'references']]
+# test2018 = dblp_top50_test.loc[dblp_top50_test.time_step == 284, ['new_papr_id', 'new_venue_id', 'new_first_aId', 'references']]
 
 # 塞入bert
 titles = pd.read_pickle('preprocess/edge/titles_bert.pkl')
@@ -103,10 +103,6 @@ def generate_hot(data, k=150, threshlod=10):
 
 # 產生hot
 hot, recPool = generate_hot(dblp_remain.paper_references, threshlod=5)
-# testing hot
-paper284_ids = np.append(train2017.new_papr_id.values, test2018.new_papr_id.values)
-hot284 = dblp_remain[dblp_remain['paper_id'].isin(paper284_ids)].paper_references
-test_hot, testPool = generate_hot(hot284)
 
 
 # data generator
@@ -269,7 +265,7 @@ def rec(all, targets, pred, t='train', emb='GraphSAGE'):
     return recommend_papers
 
 
-def prepare_data(t='train', emb='GraphSAGE', save=True, load=False):
+def prepare_data(t='train', emb='GraphSAGE', save=False, load=False, y=''):
     if load:
         save = False
         # test的
@@ -277,8 +273,7 @@ def prepare_data(t='train', emb='GraphSAGE', save=True, load=False):
         sort_y = np.load('model/baseline/tmp/'+t+'/sort_y.npy')
         x_all = np.load('model/baseline/tmp/'+t+'/x_all.npy')
         paper_emb = np.load('model/baseline/tmp/'+t+'/paper_emb.npy')
-
-    if save:
+    else:
         if t == 'train':
             y = train2017[train2017.new_papr_id.isin(paper_refs['new_papr_id'].values)]
             if emb == 'deepwalk':
@@ -286,7 +281,6 @@ def prepare_data(t='train', emb='GraphSAGE', save=True, load=False):
             elif emb == 'GraphSAGE':
                 x_all, shuffled_y, paper_emb = next(embedding_loader(sage_emb, y, 'GraphSAGE', y.shape[0]))  # 裡面會shuffle過
         elif t == 'test':
-            y = test2018  # testing
             if emb == 'deepwalk':
                 x_all, shuffled_y, paper_emb = next(embedding_loader(emb_2017, y, 'DeepWalk', y.shape[0], test=True))
             elif emb == 'GraphSAGE':
@@ -300,21 +294,19 @@ def prepare_data(t='train', emb='GraphSAGE', save=True, load=False):
             model = load_model('model/hdf5/model_gSAGE_BN.h5')
         # 一次load全部data做predict
         predictions = model.predict(x_all, workers=4)  # 預測paper_emb
-
-        np.save('model/baseline/tmp/'+t+'/embedding_predictions.npy', predictions)
-        np.save('model/baseline/tmp/'+t+'/sort_y.npy', sort_y)
-        np.save('model/baseline/tmp/'+t+'/x_all.npy', x_all)
-        np.save('model/baseline/tmp/'+t+'/paper_emb.npy', paper_emb)
+        if save:
+            np.save('model/baseline/tmp/'+t+'/embedding_predictions.npy', predictions)
+            np.save('model/baseline/tmp/'+t+'/sort_y.npy', sort_y)
+            np.save('model/baseline/tmp/'+t+'/x_all.npy', x_all)
+            np.save('model/baseline/tmp/'+t+'/paper_emb.npy', paper_emb)
     return sort_y, x_all, paper_emb, predictions
 
 
 K = 150
 # sort_y, x_all, paper_emb, predictions, recommend_papers = prepare_data(t='test')
-sort_y, x_all, paper_emb, predictions = prepare_data(t='test', load=True)
-recommend_papers = rec(paper_emb_all, y_all, predictions, t='test')
 
 
-def knn_rec():
+def knn_rec(paper_emb, predictions):
     # 找出跟NN predict出最相似的embedding當作要推薦cite的論文
     neigh = KNeighborsClassifier(n_neighbors=1, algorithm='ball_tree', n_jobs=4)  # algorithm='kd_tree', will use less memory
     neigh.fit(paper_emb_all, y_all)
@@ -335,13 +327,13 @@ def knn_rec():
         i += 1
 
 
-if GNN == 'deepwalk':
-    if train:
-        # cosine for deepwalk
-        cos_graph = cosine_similarity(paper_emb_all, paper_emb)
-        graph_recommend_papers = y_all[np.argsort(cos_graph, axis=0)[::-1]][1:K+1]
-    cos = np.dot(paper_emb_all, predictions.T)
-    recommend_papers = y_all[np.argsort(cos, axis=0)[::-1]][:K]
+# if GNN == 'deepwalk':
+#     if train:
+#         # cosine for deepwalk
+#         cos_graph = cosine_similarity(paper_emb_all, paper_emb)
+#         graph_recommend_papers = y_all[np.argsort(cos_graph, axis=0)[::-1]][1:K+1]
+#     cos = np.dot(paper_emb_all, predictions.T)
+#     recommend_papers = y_all[np.argsort(cos, axis=0)[::-1]][:K]
 
 
 def generate_ans(data, t='train'):
@@ -360,11 +352,6 @@ def generate_ans(data, t='train'):
 # ans = paper_refs[paper_refs.new_papr_id.isin(train2017['new_papr_id'].values)]  # pp資料的答案
 # ansK = ans['join'].apply(lambda x: list(map(int, x.split(','))))
 # ansK = generate_ans(train2017)
-if train:
-    ansK = generate_ans(y_all)
-else:
-    # testing 2018 AAAI
-    test_ansK = generate_ans(sort_y, t='test')
 
 
 def _ark(actual, predicted, k=10):
@@ -426,27 +413,51 @@ def metric_bar(hot, ansK, recommend, method='MAP', t='train', kList=(1, 5, 10, 2
             rs_metrics = metrics.mapk(ansK.tolist(), recommend.T.tolist(), k)
             plt.bar('Hot', hot_metrics)
             plt.bar('RS', rs_metrics)
-            if t == 'train':
-                plt.bar('GR', metrics.mapk(ansK.tolist(), graph_recommend_papers.T.tolist(), k))
+            # if t == 'train':
+            #     plt.bar('GR', metrics.mapk(ansK.tolist(), graph_recommend_papers.T.tolist(), k))
         if method == 'Recall':
             plt.bar('Hot', mark(ansK, [hot]*ansK.shape[0], k))
             plt.bar('RS', mark(ansK, recommend.T, k))
-            if t == 'train':
-                plt.bar('GR', mark(ansK.values, graph_recommend_papers.T, k))
+            # if t == 'train':
+            #     plt.bar('GR', mark(ansK.values, graph_recommend_papers.T, k))
         plt.ylabel('score')
         plt.title(t+' '+method+'@'+str(k))
         # plt.show()
 
 
-# 找答案非空list的做testing, 避免MAP被灌水
-not_null = np.nonzero(test_ansK.values)
-test_ansK = test_ansK.values[not_null]
-recommend_papers = recommend_papers.T[not_null].T
+def rolling_test(time_step=284):
+    test_timestep = dblp_top50_test.loc[dblp_top50_test.time_step == time_step, ['new_papr_id', 'new_venue_id', 'new_first_aId', 'references']]
+    return test_timestep
+
 
 if train:
+    ansK = generate_ans(y_all)
+    sort_y, x_all, paper_emb, predictions = prepare_data(load=True)
+    recommend_papers = rec(paper_emb_all, y_all, predictions)
     metric_bar(hot, ansK, recommend_papers)  # train MAP
     metric_bar(hot, ansK, recommend_papers, 'Recall')  # train Recall
 else:
-    metric_bar(test_hot, test_ansK, recommend_papers, t='test')  # test MAP
-    metric_bar(test_hot, test_ansK, recommend_papers, 'Recall', t='test')  # test recall
-    show_average_results(test_ansK.tolist(), recommend_papers.T.tolist())
+    # rolling test
+    test_timesteps = [284, 302, 307, 310, 318, 321]
+    for ts in test_timesteps:
+        # testing hot
+        test2018 = rolling_test(ts)
+        paper284_ids = np.append(train2017.new_papr_id.values, test2018.new_papr_id.values)
+        hot284 = dblp_remain[dblp_remain['paper_id'].isin(paper284_ids)].paper_references
+        test_hot, testPool = generate_hot(hot284)
+
+        sort_y, x_all, paper_emb, predictions = prepare_data(t='test', y=test2018)
+        recommend_papers = rec(paper_emb_all, y_all, predictions, t='test')
+
+        # testing 2018 AAAI
+        test_ansK = generate_ans(sort_y, t='test')
+
+        # 找答案非空list的做testing, 避免MAP被灌水
+        not_null = np.nonzero(test_ansK.values)
+        test_ansK = test_ansK.values[not_null]
+        recommend_papers = recommend_papers.T[not_null].T
+
+        metric_bar(test_hot, test_ansK, recommend_papers, t='test')  # test MAP
+        metric_bar(test_hot, test_ansK, recommend_papers, 'Recall', t='test')  # test recall
+        show_average_results(test_ansK.tolist(), recommend_papers.T.tolist())
+        print('-'*30)
