@@ -21,7 +21,7 @@ from model.baseline.eval_metrics import show_average_results
 
 os.environ["PATH"] += os.pathsep + 'C:/Users/Wade/Anaconda3/Library/bin/graphviz'
 train = False
-GNN = 'graphSAGE'
+GNN = 'GraphSAGE'
 bert_title = 768
 bert_abstract = 768
 emb_dim = 100  # output dim (就是graph embedding後的dim)
@@ -59,7 +59,6 @@ dblp_top50_test['authors'] = pa_extra.groupby('new_papr_id')['new_author_id'].ap
 dblp_top50_test['references'] = dblp_top50[dblp_top50['new_papr_id'].isin(dblp_top50_test['new_papr_id'].values)]['references']
 dblp_top50_test.dropna(subset=['authors'], inplace=True)  # drop empty author papers
 dblp_top50_test = pd.DataFrame([np.append(row.values, d) for _, row in dblp_top50_test.iterrows() for d in row['authors']], columns=dblp_top50_test.columns.append(pd.Index(['new_first_aId'])))
-# test2018 = dblp_top50_test.loc[dblp_top50_test.time_step == 284, ['new_papr_id', 'new_venue_id', 'new_first_aId', 'references']]
 
 # 塞入bert
 titles = pd.read_pickle('preprocess/edge/titles_bert.pkl')
@@ -68,16 +67,19 @@ abstracts = pd.read_pickle('preprocess/edge/abstracts_bert.pkl')
 titles = preprocessing.scale(np.array(titles.tolist()))
 abstracts = preprocessing.scale(np.array(abstracts.tolist()))
 
-# deepwalk
-with open('preprocess/edge/deep_walk_emb.pkl', 'rb') as f:
-    emb_2017 = pickle.load(f)
-# emb_2017 = preprocessing.scale(emb_2017)
-# line embedding
-with open('preprocess/edge/line_1and2.pkl', 'rb') as file:
-    line_emb = pickle.load(file)
-# graphsage
-with open('preprocess/edge/paper_embeddings.pkl', 'rb') as f:
-    sage_emb = pickle.load(f)
+if GNN == 'DeepWalk':
+    # deepwalk
+    with open('preprocess/edge/deep_walk_emb.pkl', 'rb') as f:
+        emb_2017 = pickle.load(f)
+    # emb_2017 = preprocessing.scale(emb_2017)
+if GNN == 'LINE':
+    # line embedding
+    with open('preprocess/edge/line_1and2.pkl', 'rb') as file:
+        line_emb = pickle.load(file)
+if GNN == 'GraphSAGE':
+    # graphsage
+    with open('preprocess/edge/paper_embeddings.pkl', 'rb') as f:
+        sage_emb = pickle.load(f)
 
 # 檢查是否所有dblp的node都在embedding裡面
 # print(np.isin(train2017.new_papr_id.values, np.fromiter(line_emb.keys(), dtype=int)).sum())
@@ -169,23 +171,22 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1,
 
 
 def data_generator(emb, pIds, pool, method, save=True, load=False):
-    # todo 根據不同 method, load/ save到不同資料夾
     if load:
         save = False
-        x_train = np.load('model/baseline/tmp/x_train.npy')
-        paper_emb_train = np.load('model/baseline/tmp/paper_emb_train.npy')
-        y_all = np.load('model/baseline/tmp/y_all.npy')
-        paper_emb_all = np.load('model/baseline/tmp/paper_emb_all.npy')
+        x_train = np.load('model/baseline/tmp/'+GNN+'/x_train.npy')
+        paper_emb_train = np.load('model/baseline/tmp/'+GNN+'/paper_emb_train.npy')
+        y_all = np.load('model/baseline/tmp/'+GNN+'/y_all.npy')
+        paper_emb_all = np.load('model/baseline/tmp/'+GNN+'/paper_emb_all.npy')
 
     if save:
         # 產生training data
         x_train, _, paper_emb_train = next(embedding_loader(emb, pIds, method, pIds.shape[0]))
         # 產生推薦pool的paper embedding
         _, y_all, paper_emb_all = next(embedding_loader(emb, pool, method, pool.shape[0], shuffle=0))
-        np.save('model/baseline/tmp/x_train.npy', x_train)
-        np.save('model/baseline/tmp/paper_emb_train.npy', paper_emb_train)
-        np.save('model/baseline/tmp/y_all.npy', y_all)
-        np.save('model/baseline/tmp/paper_emb_all.npy', paper_emb_all)
+        np.save('model/baseline/tmp/'+GNN+'/x_train.npy', x_train)
+        np.save('model/baseline/tmp/'+GNN+'/paper_emb_train.npy', paper_emb_train)
+        np.save('model/baseline/tmp/'+GNN+'/y_all.npy', y_all)
+        np.save('model/baseline/tmp/'+GNN+'/paper_emb_all.npy', paper_emb_all)
     return x_train, paper_emb_train, y_all, paper_emb_all
 
 
@@ -193,7 +194,7 @@ def data_generator(emb, pIds, pool, method, save=True, load=False):
 paper_pool = train2017[train2017.new_papr_id.isin(recPool)]
 
 # load previous results
-x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2017, paper_pool, 'GraphSAGE', load=True)
+x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2017, paper_pool, GNN, load=True)
 
 
 def train_model(x, y, batch=1024, save=False):
@@ -219,7 +220,7 @@ def train_model(x, y, batch=1024, save=False):
 
     if save:
         # save model
-        model.save('model/hdf5/model_gSAGE_BN.h5')
+        model.save('model/hdf5/'+GNN+'.h5')
     return model, train_history
 
 
@@ -267,7 +268,6 @@ def rec(all, targets, pred, t='train', emb='GraphSAGE'):
 
 def prepare_data(t='train', emb='GraphSAGE', save=False, load=False, y=''):
     if load:
-        save = False
         # test的
         predictions = np.load('model/baseline/tmp/'+t+'/embedding_predictions.npy')
         sort_y = np.load('model/baseline/tmp/'+t+'/sort_y.npy')
@@ -291,7 +291,7 @@ def prepare_data(t='train', emb='GraphSAGE', save=False, load=False, y=''):
         x_all = x_all[sorter]  # 所有input
         paper_emb = paper_emb[sorter]  # 100維的paper_emb
         if emb == 'GraphSAGE':
-            model = load_model('model/hdf5/model_gSAGE_BN.h5')
+            model = load_model('model/hdf5/'+GNN+'.h5')
         # 一次load全部data做predict
         predictions = model.predict(x_all, workers=4)  # 預測paper_emb
         if save:
@@ -327,7 +327,7 @@ def knn_rec(paper_emb, predictions):
         i += 1
 
 
-# if GNN == 'deepwalk':
+# if GNN == 'DeepWalk':
 #     if train:
 #         # cosine for deepwalk
 #         cos_graph = cosine_similarity(paper_emb_all, paper_emb)
@@ -338,10 +338,8 @@ def knn_rec(paper_emb, predictions):
 
 def generate_ans(data, t='train'):
     if t == 'train':
-        # ans = paper_refs[paper_refs.new_papr_id.isin(data['new_papr_id'].values), 'join'].apply(lambda x: list(map(int, x.split(','))))
-        # fixme follow test below
-        ans_t = paper_refs[paper_refs.new_papr_id.isin(data), 'join']
-        ans = ans_t.apply(lambda x: list(map(int, x.split(','))))
+        ans_t = paper_refs[paper_refs.new_papr_id.isin(data)]
+        ans = ans_t['join'].apply(lambda x: list(map(int, x.split(','))))
     else:
         dblp = dblp_top50_test.drop_duplicates(subset=['new_papr_id']).sort_values(by=['new_papr_id']).reset_index(drop=True)
         test_ans = pd.concat([dblp[dblp['new_papr_id'].eq(x)] for x in data], ignore_index=True).fillna(value='[]')
@@ -422,7 +420,7 @@ def metric_bar(hot, ansK, recommend, method='MAP', t='train', kList=(1, 5, 10, 2
             #     plt.bar('GR', mark(ansK.values, graph_recommend_papers.T, k))
         plt.ylabel('score')
         plt.title(t+' '+method+'@'+str(k))
-        # plt.show()
+        plt.show()
 
 
 def rolling_test(time_step=284):
@@ -432,7 +430,7 @@ def rolling_test(time_step=284):
 
 if train:
     ansK = generate_ans(y_all)
-    sort_y, x_all, paper_emb, predictions = prepare_data(load=True)
+    sort_y, x_all, paper_emb, predictions = prepare_data()
     recommend_papers = rec(paper_emb_all, y_all, predictions)
     metric_bar(hot, ansK, recommend_papers)  # train MAP
     metric_bar(hot, ansK, recommend_papers, 'Recall')  # train Recall
@@ -457,7 +455,7 @@ else:
         test_ansK = test_ansK.values[not_null]
         recommend_papers = recommend_papers.T[not_null].T
 
-        metric_bar(test_hot, test_ansK, recommend_papers, t='test')  # test MAP
-        metric_bar(test_hot, test_ansK, recommend_papers, 'Recall', t='test')  # test recall
+        # metric_bar(test_hot, test_ansK, recommend_papers, t='test')  # test MAP
+        # metric_bar(test_hot, test_ansK, recommend_papers, 'Recall', t='test')  # test recall
         show_average_results(test_ansK.tolist(), recommend_papers.T.tolist())
         print('-'*30)
