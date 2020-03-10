@@ -3,16 +3,15 @@ import numpy as np
 import pickle
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-import ast
-from collections import Counter
 from sklearn import preprocessing
 from keras.models import Model, load_model
 from keras.layers import Input, Dense, BatchNormalization
 import tensorflow as tf
 from model.baseline.graphsage_dnn.Layers import custom_Dense, zeros
 from model.baseline.eval_metrics import show_average_results
+import os
 
-
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 train = False
 GNN = 'GraphSAGE'
 bert_title = 768
@@ -55,17 +54,11 @@ c_index = np.where(np.in1d(emb_node, candidate_ids))
 candidate_paper_emb = paper_emb[c_index]
 
 
-def gen_paper(paper_i_emb, label):
-    # fixme 要用batch的方式避免一次太多篇
+def gen_paper(paper_i_emb):
     paper_i_pair = np.tile(paper_i_emb, (len(candidate_ids))).reshape(-1, 100)  # repeat rows
-    candidates = np.tile(candidate_paper_emb, (len(paper_emb))).reshape(-1, 100)  # repeat candidate_ids
+    candidates = np.tile(candidate_paper_emb, (len(paper_i_emb))).reshape(-1, 100)  # repeat candidate_ids
     paper_i_pair = np.concatenate((paper_i_pair, candidates), axis=1)  # shape: N * len(candidate_ids) * 200
-    # repeat ans with len(candidate_ids) times
-    # label = np.tile(label, (len(candidate_ids), 1))
-
-    # todo predict
-    graphsage_nn()
-    return paper_i_pair
+    return graphsage_nn(paper_i_pair, len(paper_i_emb))
 
 
 # 用 graphsage train的 nn來推薦
@@ -81,7 +74,7 @@ def graphsage_nn(x, size=20, K=150):
         with tf.Session() as sess:
             saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
             node_pred = custom_Dense(w0, w1, w2, b0, b1, b2)
-            pred = sess.run(tf.nn.sigmoid(node_pred(x.astype('float32'))))
+            pred = sess.run(tf.nn.sigmoid(node_pred(x.astype('float32')))).reshape(size, -1)
     new_sorter = pred.argsort(axis=1)[::-1][:, :K]  # sort and select first 150
     batch_classes = np.tile(candidate_ids, (size, 1))  # shape: N * len(candidate_ids)
     classes = np.take_along_axis(batch_classes, new_sorter, axis=1)
@@ -170,33 +163,49 @@ def show_train_history(train_history, train, validation):
     plt.show()
 
 
+def pred_paper_emb(x_all, load=True):
+    model = load_model('model/hdf5/' + GNN + '.h5')
+    predictions = model.predict(x_all, workers=4)
+    return predictions
+
+
 def gen_test_data(test_nodes):
     x, y = [], []
     for i in tqdm(test_nodes):
         ans = pp[pp['new_papr_id'] == i]['new_cited_papr_id'].values
-        emb_title = titles[i]
-        emb_abs = abstracts[i]
-        author = pa_extra[pa_extra['new_papr_id'] == i]['new_author_id'].values
-        venue = pv[pv['new_papr_id'] == i]['new_venue_id'].values
-        emb_venue = all_emb[np.where(np.in1d(all_node, venue))]
-        if len(author) > 0:
-            # fixme handle missing venue embedding
-            emb_author = all_emb[np.where(np.in1d(all_node, author))]
-            concat = np.concatenate((emb_venue, emb_title, emb_abs), axis=None)
-            if len(emb_author) > 1:
-                repeat = np.tile(concat, len(emb_author))
-                emb_concat = np.concatenate((emb_author, repeat), axis=None)
-                x.extend(emb_concat.reshape(len(emb_author), -1).tolist())
-                repeat_y = np.tile(ans, (len(emb_author), 1))
-                y.extend(repeat_y.tolist())
-            elif len(emb_author) == 1:
-                x.append(np.concatenate((emb_author, concat), axis=None).tolist())
-                y.append(ans.tolist())
+        if len(ans) > 0:
+            emb_title = titles[i]
+            emb_abs = abstracts[i]
+            author = pa_extra[pa_extra['new_papr_id'] == i]['new_author_id'].values
+            venue = pv[pv['new_papr_id'] == i]['new_venue_id'].values
+            emb_venue = all_emb[np.where(np.in1d(all_node, venue))]
+            if len(author) > 0:
+                # fixme venue依年分不同的問題
+                if len(emb_venue) == 0:
+                    emb_venue = np.zeros(emb_dim)
+                emb_author = all_emb[np.where(np.in1d(all_node, author))]
+                concat = np.concatenate((emb_venue, emb_title, emb_abs), axis=None)
+                if len(emb_author) > 1:
+                    repeat = np.tile(concat, len(emb_author))
+                    emb_concat = np.concatenate((emb_author, repeat), axis=None)
+                    x.extend(emb_concat.reshape(len(emb_author), -1).tolist())
+                    repeat_y = np.tile(ans, (len(emb_author), 1))
+                    y.extend(repeat_y.tolist())
+                elif len(emb_author) == 1:
+                    x.append(np.concatenate((emb_author, concat), axis=None).tolist())
+                    y.append(ans.tolist())
 
+    # 先預測出 paper emb
+    p_emb = pred_paper_emb(np.array(x))
     results = []
     batch_size = 20
-    result = gen_paper()
-    return results
+    for j in tqdm(range(0, len(x), batch_size)):
+        if j+batch_size > len(x):
+            results.extend(gen_paper(p_emb[j:]).tolist())
+        else:
+            results.extend(gen_paper(p_emb[j:(j+batch_size)]).tolist())
+
+    return results, y
 
 
 if train:
@@ -211,15 +220,10 @@ else:
     pp = pd.read_pickle('preprocess/edge/paper_paper.pkl')
     pv = pd.read_pickle('preprocess/edge/paper_venue.pkl')
     pa_extra = pd.read_pickle('preprocess/edge/p_a_delete_author.pkl')
-    # dblp_top50 = pd.read_pickle('preprocess/edge/paper_2011up_venue50.pkl')
-    # pv['authors'] = pa_extra.groupby('new_papr_id')['new_author_id'].apply(list)  # groupby element to list
-    # pv['references'] = dblp_top50[dblp_top50['new_papr_id'].isin(pv['new_papr_id'].values)]['references']
-    # pv.dropna(subset=['authors'], inplace=True)  # drop empty author papers
-    # pv = pd.DataFrame([np.append(row.values, d) for _, row in pv.iterrows() for d in row['authors']], columns=pv.columns.append(pd.Index(['new_first_aId'])))
     test_timesteps = [284, 302, 307, 310, 318, 321]
     for ts in test_timesteps:
-        # test_timestep = pv.loc[pv.time_step == ts, ['new_papr_id', 'new_venue_id', 'new_first_aId', 'references']]
         timestep = pv.loc[pv.time_step == ts, 'new_papr_id']
-        test_emb, label = gen_test_data(timestep.values)
+        test_rec, label = gen_test_data(timestep.values)
 
-
+        show_average_results(label, test_rec)
+        print('-'*30)
