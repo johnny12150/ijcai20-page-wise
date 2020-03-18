@@ -14,8 +14,6 @@ with open('F:/volume/0217graphsage/0106/all_edge.pkl', 'rb') as file:
 # 把df原始 id map到 graphsage node的 id
 # with open('F:/volume/0217graphsage/0106/id_map.pkl', 'rb') as file:
 #     id_map = pickle.load(file)
-
-# 有的化, loss = 2.667, acc = 0.51
 # all_edge['head'] = all_edge['head'].map(id_map)
 # all_edge['tail'] = all_edge['tail'].map(id_map)
 
@@ -101,6 +99,7 @@ def make_prediction(x, size):
             # use tensor_board to check nodes
             # writer = tf.summary.FileWriter("TensorBoard/", graph=sess.graph)
             # print(x.nbytes / 10 ** 9)
+            # fixme 檢查是不是 id接近的embedding都一致
             i_prediction = sess.run(tf.nn.sigmoid(node_pred(x))).reshape(size, -1)
             # print(len([n.name for n in tf.get_default_graph().as_graph_def().node]))  # check tf graph size
 
@@ -124,7 +123,6 @@ if task == 0:
     for i in tqdm(range(50)):
         batch_paths = head_paper_ids[i*batch_size:(i+1)*batch_size]  # 一次處理20筆
         pred, y_label = next(gen_paper(batch_paths))
-        # todo save ans & rs at each batch
         ans.extend(y_label)
         rs.extend(pred.tolist())
 
@@ -181,7 +179,13 @@ def sage_nn(nodes, save=True):
 
 if task == 1:
     tf.reset_default_graph()
-    saver = tf.train.import_meta_graph('F:/volume/0217graphsage/0106/model_output/model.meta')  # restore all
+    w0 = tf.get_variable('dense_1_vars/weights', shape=(200, 50))  # define variables that we want
+    w1 = tf.get_variable('dense_1_vars/weights_1', shape=(50, 50))
+    w2 = tf.get_variable('dense_1_vars/weights_2', shape=(50, 1))
+    b0 = zeros(50, 'dense_1_vars/bias')
+    b1 = zeros(50, 'dense_1_vars/bias_1')
+    b2 = zeros(1, 'dense_1_vars/bias_2')
+    saver = tf.train.Saver()
     sess = tf.Session()
     saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
     all_vars = tf.trainable_variables()
@@ -197,6 +201,6 @@ if task == 1:
     print(np.sum(loss.reshape(-1))/ len(loss))
     prediction = sess.run(tf.nn.sigmoid(prediction_logit))
     prediction = np.round(prediction.reshape(-1))  # flatten & to 0/ 1
-    print(np.sum(np.equal(prediction, y))/ len(y))
+    print(np.sum(np.equal(prediction, y)) / len(y))
     sess.close()
 
