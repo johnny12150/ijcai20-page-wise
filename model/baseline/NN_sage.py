@@ -12,12 +12,14 @@ from model.baseline.eval_metrics import show_average_results
 import os
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-train = False
+train = True
 GNN = 'GraphSAGE'
 bert_title = 768
 bert_abstract = 768
 emb_dim = 100  # output dim (就是graph embedding後的dim)
 
+pv = pd.read_pickle('preprocess/edge/paper_venue.pkl')
+pa_extra = pd.read_pickle('preprocess/edge/p_a_delete_author.pkl')
 # 塞入bert
 titles = pd.read_pickle('preprocess/edge/titles_bert.pkl')
 abstracts = pd.read_pickle('preprocess/edge/abstracts_bert.pkl')
@@ -36,8 +38,8 @@ for id, emb in zip(all_node, all_emb):
 with open('F:/volume/0217graphsage/0106/all_edge.pkl', 'rb') as file:
     all_edge = pickle.load(file)
 # 把df原始 id map到 graphsage node的 id
-# with open('F:/volume/0217graphsage/0106/id_map.pkl', 'rb') as file:
-#     id_map = pickle.load(file)
+with open('F:/volume/0217graphsage/0106/id_map.pkl', 'rb') as file:
+    id_map = pickle.load(file)
 # all_edge['head'] = all_edge['head'].map(id_map)
 # all_edge['tail'] = all_edge['tail'].map(id_map)
 
@@ -84,17 +86,24 @@ def graphsage_nn(x, size=20, K=150):
 def graph_bert_pair(save=True):
     x, y, x_ids, y_label = [], [], [], []
     for i in tqdm(head_paper_ids):
-        # head = paper_emb[np.where(np.in1d(emb_node, i))[0]]
+        p_emb = paper_emb[np.where(emb_node == i)[0]]
         refs = all_paper[all_paper['head'] == i]['tail'].values
         # 找 i相關的 BERT emb
         emb_t = titles[i]
         emb_a = abstracts[i]
-        authors = all_edge[(all_edge['head']==i) & (all_edge.rel==1)]['tail'].values  # author
-        v = all_edge[(all_edge['head']==i) & (all_edge.rel==8)]['tail'].values  # venue
+        # fixme author, venue id2idx
+        # authors = all_edge[(all_edge['head']==i) & (all_edge.rel==1)]['tail'].values  # author
+        authors = pa_extra[pa_extra['new_papr_id'] == i]['new_author_id'].values
+        authors = list(map(id_map.get, authors))
+        # v = all_edge[(all_edge['head']==i) & (all_edge.rel==8)]['tail'].values  # venue
+        v = pv[pv['new_papr_id'] == i]['new_venue_id'].values
+        v = list(map(id_map.get, v))
         if len(v) == 0:
             v_emb = np.zeros(emb_dim)
         else:
             v_emb = all_emb[np.where(np.in1d(all_node, v))]
+            if len(v_emb) == 0:
+                v_emb = np.zeros(emb_dim)
         if len(authors) == 0:
             a_emb = np.zeros(emb_dim)
         else:
@@ -108,14 +117,14 @@ def graph_bert_pair(save=True):
             repeat = np.tile(concat, len(a_emb))
             emb_concat = np.concatenate((a_emb, repeat), axis=None)
             x.extend(emb_concat.reshape(len(a_emb), -1))
-            repeat_i = np.tile(paper_emb[np.where(emb_node == i)[0]], len(a_emb)).reshape(len(a_emb), -1)
+            repeat_i = np.tile(p_emb, len(a_emb)).reshape(len(a_emb), -1)
             y.extend(repeat_i)
             x_ids.extend(np.tile(i, (len(a_emb), 1)).tolist())
             y_label.extend(np.tile(refs, (len(a_emb), 1)).tolist())
         else:
             emb_concat = np.concatenate((a_emb, v_emb, emb_t, emb_a), axis=None)
             x += [emb_concat]
-            y += [paper_emb[np.where(emb_node == i)[0]].reshape(-1)]
+            y += [p_emb.reshape(-1)]
             x_ids.append([i])
             y_label.append(refs.tolist())
     if save:
@@ -180,7 +189,6 @@ def gen_test_data(test_nodes):
             venue = pv[pv['new_papr_id'] == i]['new_venue_id'].values
             emb_venue = all_emb[np.where(np.in1d(all_node, venue))]
             if len(author) > 0:
-                # fixme venue依年分不同的問題
                 if len(emb_venue) == 0:
                     emb_venue = np.zeros(emb_dim)
                 emb_author = all_emb[np.where(np.in1d(all_node, author))]
@@ -218,12 +226,9 @@ if train:
 else:
     # 找特定時間的 paper id
     pp = pd.read_pickle('preprocess/edge/paper_paper.pkl')
-    pv = pd.read_pickle('preprocess/edge/paper_venue.pkl')
-    pa_extra = pd.read_pickle('preprocess/edge/p_a_delete_author.pkl')
     test_timesteps = [284, 302, 307, 310, 318, 321]
     for ts in test_timesteps:
         timestep = pv.loc[pv.time_step == ts, 'new_papr_id']
         test_rec, label = gen_test_data(timestep.values)
-
         show_average_results(label, test_rec)
         print('-'*30)
