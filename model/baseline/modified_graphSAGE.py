@@ -36,23 +36,6 @@ c_index = np.where(np.in1d(emb_node, candidate_ids))
 candidate_paper_emb = paper_emb[c_index]
 
 
-def recommender(weights, bias, inputs, sigmoid=True):
-    # transform
-    hidden_1 = tf.matmul(inputs, weights[0])
-    hidden_1 += bias[0]
-    hidden_1 = tf.nn.relu(hidden_1)
-    hidden_2 = tf.matmul(hidden_1, weights[1])
-    hidden_2 += bias[1]
-    hidden_2 = tf.nn.relu(hidden_2)
-    hidden_3 = tf.matmul(hidden_2, weights[2])
-    hidden_3 += bias[2]
-    if sigmoid:
-        output = tf.nn.sigmoid(hidden_3)
-    else:
-        output = hidden_3
-    return output
-
-
 # create paper pair
 def gen_paper(batch_i, pred=True):
     index_i = np.where(np.in1d(emb_node, batch_i))[0]
@@ -85,12 +68,13 @@ def load_paper_pair(path):
 
 # use trained tf NN to predict cite or not
 def make_prediction(x, size):
+    h1_dim, h2_dim = 50, 50
     with tf.Graph().as_default():
-        w0 = tf.get_variable('dense_1_vars/weights', shape=(200, 50))  # define variables that we want
-        w1 = tf.get_variable('dense_1_vars/weights_1', shape=(50, 50))
-        w2 = tf.get_variable('dense_1_vars/weights_2', shape=(50, 1))
-        b0 = zeros(50, 'dense_1_vars/bias')
-        b1 = zeros(50, 'dense_1_vars/bias_1')
+        w0 = tf.get_variable('dense_1_vars/weights', shape=(200, h1_dim))  # define variables that we want
+        w1 = tf.get_variable('dense_1_vars/weights_1', shape=(h1_dim, h2_dim))
+        w2 = tf.get_variable('dense_1_vars/weights_2', shape=(h2_dim, 1))
+        b0 = zeros(h1_dim, 'dense_1_vars/bias')
+        b1 = zeros(h2_dim, 'dense_1_vars/bias_1')
         b2 = zeros(1, 'dense_1_vars/bias_2')
         saver = tf.train.Saver()
         with tf.Session() as sess:
@@ -99,7 +83,6 @@ def make_prediction(x, size):
             # use tensor_board to check nodes
             # writer = tf.summary.FileWriter("TensorBoard/", graph=sess.graph)
             # print(x.nbytes / 10 ** 9)
-            # fixme 檢查是不是 id接近的embedding都一致
             i_prediction = sess.run(tf.nn.sigmoid(node_pred(x))).reshape(size, -1)
             # print(len([n.name for n in tf.get_default_graph().as_graph_def().node]))  # check tf graph size
 
@@ -107,6 +90,7 @@ def make_prediction(x, size):
         # https://stackoverflow.com/questions/33140674/argsort-for-a-multidimensional-ndarray
         # https://stackoverflow.com/questions/20103779/index-2d-numpy-array-by-a-2d-array-of-indices-without-loops
         new_sorter = i_prediction.argsort(axis=1)[::-1][:, :K]  # sort and select first 150
+        sort = np.sort(i_prediction, axis=1)
         batch_classes = np.tile(candidate_ids, (size, 1))  # shape: N * len(candidate_ids)
         classes = np.take_along_axis(batch_classes, new_sorter, axis=1)
     return classes
