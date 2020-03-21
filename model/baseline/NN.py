@@ -153,7 +153,8 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1,
 
             vId = Ids[:, 0]
             aId = Ids[:, 1]
-            aId = aId[np.isin(aId, node_id)]  # 避免挑到的aId/ vId不在node_id內
+            # fixme np的 isin實在太慢了
+            # aId = aId[np.isin(aId, node_id)]  # 避免挑到的aId不在node_id內
             for i in range(aId.shape[0]):
                 y_id += [batch_i]
                 if graph == 'LINE' or graph == 'GraphSAGE' or graph == "DeepWalk":
@@ -168,7 +169,7 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1,
                     batch_x += [emb_]
                 batch_y += [emb_p]
 
-            # fixme 這裡居然更慢
+            # 速度跟for loop 一樣
             # if graph == 'LINE' or graph == 'GraphSAGE' or graph == "DeepWalk":
             #     y_id.extend(np.tile(batch_i, (aId.shape[0], 1)).tolist())
             #     if not test:
