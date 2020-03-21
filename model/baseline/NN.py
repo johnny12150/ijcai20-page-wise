@@ -80,6 +80,9 @@ if GNN == 'GraphSAGE':
     # graphsage
     with open('preprocess/edge/paper_embeddings.pkl', 'rb') as f:
         sage_emb = pickle.load(f)
+    # fixme 為了加速產生pair, 把dict拆成兩個 1d array
+    node = np.fromiter(sage_emb.keys(), dtype=int)
+    # emb = sage_emb.values()
 
 # 檢查是否所有dblp的node都在embedding裡面
 # print(np.isin(train2017.new_papr_id.values, np.fromiter(line_emb.keys(), dtype=int)).sum())
@@ -148,8 +151,7 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1,
 
             vId = Ids[:, 0]
             aId = Ids[:, 1]
-            # 避免挑到的aId/ vId不在node_id內
-            aId = aId[np.isin(aId, node_id)]
+            aId = aId[np.isin(aId, node_id)]  # 避免挑到的aId/ vId不在node_id內
             for i in range(aId.shape[0]):
                 y_id += [batch_i]
                 if graph == 'LINE' or graph == 'GraphSAGE' or graph == "DeepWalk":
@@ -163,6 +165,20 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1,
                 if shuffle:
                     batch_x += [emb]
                 batch_y += [emb_p]
+
+            # fixme 這裡要加速, 用dict實在太慢了
+            if graph == 'LINE' or graph == 'GraphSAGE' or graph == "DeepWalk":
+                y_id.extend(np.tile(batch_i, (aId.shape[0], 1)).tolist())
+                if not test:
+                    emb_p = np.tile(emb_data[str(batch_i)], (aId.shape[0], 1)).tolist()
+                batch_y.extend(emb_p)
+                if shuffle:
+                    v_emb = emb[np.where(np.in1d(node, vId))]
+                    emb_ = np.concatenate((v_emb, emb_t, emb_a), axis=None)
+                    emb2 = emb[np.where(np.in1d(node, aId))]
+                    emb_ = np.tile(emb_, (emb2.shape[0], 1))
+                    emb_ = np.concatenate((emb2, emb_), axis=None)
+                    batch_x += [emb_]
 
         batch_x = np.array(batch_x)
         batch_y = np.array(batch_y)
@@ -194,7 +210,7 @@ def data_generator(emb, pIds, pool, method, save=True, load=False):
 paper_pool = train2017[train2017.new_papr_id.isin(recPool)]
 
 # load previous results
-x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2017, paper_pool, GNN, load=True)
+x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2017, paper_pool, GNN)
 
 
 def train_model(x, y, batch=1024, save=False):
@@ -447,7 +463,7 @@ else:
         sort_y, x_all, paper_emb, predictions = prepare_data(t='test', y=test2018)
         recommend_papers = rec(paper_emb_all, y_all, predictions, t='test')
 
-        # testing 2018 AAAI
+        # testing 2018 AAAI as answer
         test_ansK = generate_ans(sort_y, t='test')
 
         # 找答案非空list的做testing, 避免MAP被灌水
