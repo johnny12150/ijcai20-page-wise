@@ -80,9 +80,11 @@ if GNN == 'GraphSAGE':
     # graphsage
     with open('preprocess/edge/paper_embeddings.pkl', 'rb') as f:
         sage_emb = pickle.load(f)
-    # fixme 為了加速產生pair, 把dict拆成兩個 1d array
+    # 為了加速產生pair, 把dict拆成兩個 1d array
     node = np.fromiter(sage_emb.keys(), dtype=int)
-    # emb = sage_emb.values()
+    emb = np.array(list(sage_emb.values()))
+    # emb = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/embedding.npy')
+    # node = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/emb_node.npy')
 
 # 檢查是否所有dblp的node都在embedding裡面
 # print(np.isin(train2017.new_papr_id.values, np.fromiter(line_emb.keys(), dtype=int)).sum())
@@ -145,7 +147,7 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1,
             emb_a = abstracts[batch_i]
             # 根據新paper id 找出 aId, vId
             if not test:
-                Ids = dblp_top50_conf.loc[dblp_top50_conf['new_papr_id'] == batch_i, ['new_venue_id', 'new_first_aId']].values
+                Ids = dblp_top50_conf[dblp_top50_conf['new_papr_id'] == batch_i][['new_venue_id', 'new_first_aId']].values
             else:
                 Ids = dblp_top50_test.loc[dblp_top50_test['new_papr_id'] == batch_i, ['new_venue_id', 'new_first_aId']].values
 
@@ -161,24 +163,24 @@ def embedding_loader(emb_data, file_len, graph="LINE", batch_size=32, shuffle=1,
                     if shuffle:
                         emb1 = emb_data[str(vId[i])]
                         emb2 = emb_data[str(int(aId[i]))]
-                        emb = np.concatenate((emb1, emb2, emb_t, emb_a), axis=None)
+                        emb_ = np.concatenate((emb1, emb2, emb_t, emb_a), axis=None)
                 if shuffle:
-                    batch_x += [emb]
+                    batch_x += [emb_]
                 batch_y += [emb_p]
 
-            # fixme 這裡要加速, 用dict實在太慢了
-            if graph == 'LINE' or graph == 'GraphSAGE' or graph == "DeepWalk":
-                y_id.extend(np.tile(batch_i, (aId.shape[0], 1)).tolist())
-                if not test:
-                    emb_p = np.tile(emb_data[str(batch_i)], (aId.shape[0], 1)).tolist()
-                batch_y.extend(emb_p)
-                if shuffle:
-                    v_emb = emb[np.where(np.in1d(node, vId))]
-                    emb_ = np.concatenate((v_emb, emb_t, emb_a), axis=None)
-                    emb2 = emb[np.where(np.in1d(node, aId))]
-                    emb_ = np.tile(emb_, (emb2.shape[0], 1))
-                    emb_ = np.concatenate((emb2, emb_), axis=None)
-                    batch_x += [emb_]
+            # fixme 這裡居然更慢
+            # if graph == 'LINE' or graph == 'GraphSAGE' or graph == "DeepWalk":
+            #     y_id.extend(np.tile(batch_i, (aId.shape[0], 1)).tolist())
+            #     if not test:
+            #         emb_p = np.tile(emb_data[str(batch_i)], (aId.shape[0], 1)).tolist()
+            #     batch_y.extend(emb_p)
+            #     if shuffle:
+            #         v_emb = emb[np.where(np.in1d(node, vId[0]))]
+            #         emb_ = np.concatenate((v_emb, emb_t, emb_a), axis=None)
+            #         emb2 = emb[np.where(np.in1d(node, aId))]
+            #         emb_ = np.tile(emb_, (emb2.shape[0], 1))
+            #         emb_ = np.concatenate((emb2, emb_), axis=None)
+            #         batch_x.extend(emb_)
 
         batch_x = np.array(batch_x)
         batch_y = np.array(batch_y)
