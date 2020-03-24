@@ -6,13 +6,14 @@ import matplotlib.pyplot as plt
 from sklearn import preprocessing
 from keras.models import Model, load_model
 from keras.layers import Input, Dense, BatchNormalization
+from keras.callbacks import EarlyStopping
 import tensorflow as tf
 from model.baseline.graphsage_dnn.Layers import custom_Dense, zeros
 from model.baseline.eval_metrics import show_average_results
 import os
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-train = True
+train = False
 GNN = 'GraphSAGE'
 bert_title = 768
 bert_abstract = 768
@@ -30,7 +31,7 @@ abstracts = preprocessing.scale(np.array(abstracts.tolist()))
 # graphsage_dnn
 all_emb = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/embedding.npy')
 all_node = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/emb_node.npy')
-# convert two 1d to dict
+# convert two 1d array to dict
 sage_emb_dnn = {}
 for id, emb in zip(all_node, all_emb):
     sage_emb_dnn[id] = emb
@@ -65,12 +66,13 @@ def gen_paper(paper_i_emb):
 
 # 用 graphsage train的 nn來推薦
 def graphsage_nn(x, size=20, K=150):
+    h1_dim, h2_dim = 50, 50
     with tf.Graph().as_default():
-        w0 = tf.get_variable('dense_1_vars/weights', shape=(200, 50))  # define variables that we want
-        w1 = tf.get_variable('dense_1_vars/weights_1', shape=(50, 50))
-        w2 = tf.get_variable('dense_1_vars/weights_2', shape=(50, 1))
-        b0 = zeros(50, 'dense_1_vars/bias')
-        b1 = zeros(50, 'dense_1_vars/bias_1')
+        w0 = tf.get_variable('dense_1_vars/weights', shape=(200, h1_dim))  # define variables that we want
+        w1 = tf.get_variable('dense_1_vars/weights_1', shape=(h1_dim, h2_dim))
+        w2 = tf.get_variable('dense_1_vars/weights_2', shape=(h2_dim, 1))
+        b0 = zeros(h1_dim, 'dense_1_vars/bias')
+        b1 = zeros(h2_dim, 'dense_1_vars/bias_1')
         b2 = zeros(1, 'dense_1_vars/bias_2')
         saver = tf.train.Saver()
         with tf.Session() as sess:
@@ -91,11 +93,9 @@ def graph_bert_pair(save=True):
         # 找 i相關的 BERT emb
         emb_t = titles[i]
         emb_a = abstracts[i]
-        # fixme author, venue id2idx
         # authors = all_edge[(all_edge['head']==i) & (all_edge.rel==1)]['tail'].values  # author
         authors = pa_extra[pa_extra['new_papr_id'] == i]['new_author_id'].values
         authors = list(map(id_map.get, authors))
-        # v = all_edge[(all_edge['head']==i) & (all_edge.rel==8)]['tail'].values  # venue
         v = pv[pv['new_papr_id'] == i]['new_venue_id'].values
         v = list(map(id_map.get, v))
         if len(v) == 0:
@@ -114,10 +114,10 @@ def graph_bert_pair(save=True):
         # 若多個作者則拆成多筆
         if len(authors) > 1:
             concat = np.concatenate((v_emb, emb_t, emb_a), axis=None)
-            repeat = np.tile(concat, len(a_emb))
-            emb_concat = np.concatenate((a_emb, repeat), axis=None)
-            x.extend(emb_concat.reshape(len(a_emb), -1))
-            repeat_i = np.tile(p_emb, len(a_emb)).reshape(len(a_emb), -1)
+            repeat = np.tile(concat, (len(a_emb), 1))
+            emb_concat = np.concatenate((a_emb, repeat), axis=1)
+            x.extend(emb_concat)
+            repeat_i = np.tile(p_emb, (len(a_emb), 1))
             y.extend(repeat_i)
             x_ids.extend(np.tile(i, (len(a_emb), 1)).tolist())
             y_label.extend(np.tile(refs, (len(a_emb), 1)).tolist())
@@ -152,8 +152,8 @@ def train_model(x, y, batch=1024, save=False):
     # model.compile(optimizer='adam', loss='mae')
     model.compile(optimizer='adam', loss='cosine_proximity')
     # plot_model(model, to_file='pics/model_LINE.png', show_shapes=True)
-
-    train_history = model.fit(x, y, batch_size=batch, epochs=30, verbose=2, validation_split=0.33)
+    early_stopping = EarlyStopping(monitor='val_loss', patience=5, verbose=2)
+    train_history = model.fit(x, y, batch_size=batch, epochs=30, verbose=2, validation_split=0.33, callbacks=[early_stopping])
 
     if save:
         model.save('model/hdf5/model_gSAGE_NN.h5')
@@ -223,6 +223,7 @@ if train:
     # x, y = x[p], y[p]
     model, train_history = train_model(x, y, save=True)
     show_train_history(train_history, 'loss', 'val_loss')
+    # todo show train MAP
 else:
     # 找特定時間的 paper id
     pp = pd.read_pickle('preprocess/edge/paper_paper.pkl')
