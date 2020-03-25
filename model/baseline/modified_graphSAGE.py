@@ -68,7 +68,7 @@ def load_paper_pair(path):
 
 # use trained tf NN to predict cite or not
 def make_prediction(x, size):
-    h1_dim, h2_dim = 50, 50
+    h1_dim, h2_dim = 300, 100
     with tf.Graph().as_default():
         w0 = tf.get_variable('dense_1_vars/weights', shape=(200, h1_dim))  # define variables that we want
         w1 = tf.get_variable('dense_1_vars/weights_1', shape=(h1_dim, h2_dim))
@@ -89,8 +89,8 @@ def make_prediction(x, size):
         # sort classes and output at the same time
         # https://stackoverflow.com/questions/33140674/argsort-for-a-multidimensional-ndarray
         # https://stackoverflow.com/questions/20103779/index-2d-numpy-array-by-a-2d-array-of-indices-without-loops
-        new_sorter = i_prediction.argsort(axis=1)[::-1][:, :K]  # sort and select first 150
-        sort = np.sort(i_prediction, axis=1)
+        new_sorter = i_prediction.argsort(axis=1)[:, -K:]  # sort and select first 150
+        new_sorter = np.flip(new_sorter, axis=1)
         batch_classes = np.tile(candidate_ids, (size, 1))  # shape: N * len(candidate_ids)
         classes = np.take_along_axis(batch_classes, new_sorter, axis=1)
     return classes
@@ -136,7 +136,7 @@ def sage_nn(nodes, save=True):
         paper_i_cite_emb = paper_emb[i_cited_index]  # paper i 有cite的embedding
         num_cited = paper_i_cite_emb.shape[0]  # paper i cite 幾篇
         # add negative sample
-        num_neg_sample = num_cited  # 設定negative sample數量
+        num_neg_sample = 10  # 設定negative sample數量
         # neg_index = np.where(~np.in1d(candidate_ids, cite_paper))[0]
 
         # negative index就是positive的差集
@@ -163,11 +163,12 @@ def sage_nn(nodes, save=True):
 
 if task == 1:
     tf.reset_default_graph()
-    w0 = tf.get_variable('dense_1_vars/weights', shape=(200, 50))  # define variables that we want
-    w1 = tf.get_variable('dense_1_vars/weights_1', shape=(50, 50))
-    w2 = tf.get_variable('dense_1_vars/weights_2', shape=(50, 1))
-    b0 = zeros(50, 'dense_1_vars/bias')
-    b1 = zeros(50, 'dense_1_vars/bias_1')
+    h1_dim, h2_dim = 300, 100
+    w0 = tf.get_variable('dense_1_vars/weights', shape=(200, h1_dim))  # define variables that we want
+    w1 = tf.get_variable('dense_1_vars/weights_1', shape=(h1_dim, h2_dim))
+    w2 = tf.get_variable('dense_1_vars/weights_2', shape=(h2_dim, 1))
+    b0 = zeros(h1_dim, 'dense_1_vars/bias')
+    b1 = zeros(h2_dim, 'dense_1_vars/bias_1')
     b2 = zeros(1, 'dense_1_vars/bias_2')
     saver = tf.train.Saver()
     sess = tf.Session()

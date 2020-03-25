@@ -66,7 +66,7 @@ def gen_paper(paper_i_emb):
 
 # 用 graphsage train的 nn來推薦
 def graphsage_nn(x, size=20, K=150):
-    h1_dim, h2_dim = 50, 50
+    h1_dim, h2_dim = 300, 100
     with tf.Graph().as_default():
         w0 = tf.get_variable('dense_1_vars/weights', shape=(200, h1_dim))  # define variables that we want
         w1 = tf.get_variable('dense_1_vars/weights_1', shape=(h1_dim, h2_dim))
@@ -79,7 +79,10 @@ def graphsage_nn(x, size=20, K=150):
             saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
             node_pred = custom_Dense(w0, w1, w2, b0, b1, b2)
             pred = sess.run(tf.nn.sigmoid(node_pred(x.astype('float32')))).reshape(size, -1)
-    new_sorter = pred.argsort(axis=1)[::-1][:, :K]  # sort and select first 150
+
+    # sort and select first 150
+    new_sorter = pred.argsort(axis=1)[:, -K:]  # 取值最大的150個
+    new_sorter = np.flip(new_sorter, axis=1)  # 前面取到的最大值
     batch_classes = np.tile(candidate_ids, (size, 1))  # shape: N * len(candidate_ids)
     classes = np.take_along_axis(batch_classes, new_sorter, axis=1)
     return classes
