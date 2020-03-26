@@ -7,7 +7,7 @@ from model.baseline.graphsage_dnn.Layers import custom_Dense, zeros
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-task = 0
+task = 1
 with open('F:/volume/0217graphsage/0106/all_edge.pkl', 'rb') as file:
     all_edge = pickle.load(file)
 
@@ -187,5 +187,11 @@ if task == 1:
     prediction = sess.run(tf.nn.sigmoid(prediction_logit))
     prediction = np.round(prediction.reshape(-1))  # flatten & to 0/ 1
     print(np.sum(np.equal(prediction, y)) / len(y))
+    # todo 算positive的acc
+    pos_ = x[np.where(np.in1d(y, 1))]
+    pos_label = y[np.where(np.in1d(y, 1))]
+    pos_pred = sess.run(tf.nn.sigmoid(node_pred(pos_.astype('float32'))))
+    pos_pred = np.round(pos_pred.reshape(-1))
+    print(np.sum(np.equal(pos_pred, pos_label)) / len(pos_label))
     sess.close()
 
