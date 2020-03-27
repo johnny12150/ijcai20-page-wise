@@ -124,7 +124,7 @@ if task == 0:
 
 
 # check graphsage dnn
-def sage_nn(nodes, save=True):
+def sage_nn(nodes, save=True, shuffle=False):
     x = []
     y = []
     for batch_i in tqdm(nodes):
@@ -143,9 +143,13 @@ def sage_nn(nodes, save=True):
         # neg_index = list(set(range(len(emb_node))) - set(i_cited_index[0].tolist()))
         # neg_index = np.random.choice(neg_index, num_neg_sample)  # random select
 
-        neg_index = np.where(np.in1d(emb_node, np.random.choice(candidate_ids, size=num_neg_sample)))[0]
+        if shuffle:
+            neg_index = np.where(np.in1d(emb_node, np.random.choice(candidate_ids, size=num_neg_sample)))[0]
+        else:
+            # negative的sample方式改成取positive接近的id
+            neg_index = np.where(np.in1d(emb_node, list(range(batch_i-5, batch_i+5))))
         neg_sample_emb = paper_emb[neg_index]
-        num_neg_sample = neg_sample_emb.shape[0]  # avoid node not exist
+        num_neg_sample = neg_sample_emb.shape[0]  # avoid node emb not exist
         if num_cited > 0:
             # repeat_emb = np.tile(paper_i_emb, (num_cited + num_neg_sample)).reshape(-1, 100)  # clone rows
             repeat_emb = np.tile(paper_i_emb, (num_cited + num_neg_sample, 1))
@@ -183,15 +187,15 @@ if task == 1:
     y_logit = y.astype('float32').reshape(-1, 1)
     prediction_logit = sess.run(node_pred(x.astype('float32')))  # predict
     loss = sess.run(tf.nn.sigmoid_cross_entropy_with_logits(logits=prediction_logit, labels=y_logit))
-    print(np.sum(loss.reshape(-1))/ len(loss))
+    print('Loss: ' + str(np.sum(loss.reshape(-1))/ len(loss)))
     prediction = sess.run(tf.nn.sigmoid(prediction_logit))
     prediction = np.round(prediction.reshape(-1))  # flatten & to 0/ 1
     print(np.sum(np.equal(prediction, y)) / len(y))
-    # todo 算positive的acc
+    # 算positive的acc
     pos_ = x[np.where(np.in1d(y, 1))]
     pos_label = y[np.where(np.in1d(y, 1))]
     pos_pred = sess.run(tf.nn.sigmoid(node_pred(pos_.astype('float32'))))
     pos_pred = np.round(pos_pred.reshape(-1))
-    print(np.sum(np.equal(pos_pred, pos_label)) / len(pos_label))
+    print('Positive Acc: ' + str(np.sum(np.equal(pos_pred, pos_label)) / len(pos_label)))
     sess.close()
 
