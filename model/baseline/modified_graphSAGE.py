@@ -8,7 +8,7 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 task = 1
-with open('F:/volume/0217graphsage/0106/all_edge.pkl', 'rb') as file:
+with open('F:/volume/0217graphsage/0106/all_edge_1y.pkl', 'rb') as file:
     all_edge = pickle.load(file)
 
 # 把df原始 id map到 graphsage node的 id
