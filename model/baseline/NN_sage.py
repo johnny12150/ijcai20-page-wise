@@ -36,7 +36,7 @@ sage_emb_dnn = {}
 for id, emb in zip(all_node, all_emb):
     sage_emb_dnn[id] = emb
 
-with open('F:/volume/0217graphsage/0106/all_edge.pkl', 'rb') as file:
+with open('F:/volume/0217graphsage/0106/all_edge_1y.pkl', 'rb') as file:
     all_edge = pickle.load(file)
 # 把df原始 id map到 graphsage node的 id
 with open('F:/volume/0217graphsage/0106/id_map.pkl', 'rb') as file:
@@ -100,13 +100,15 @@ def graph_bert_pair(save=True):
         authors = pa_extra[pa_extra['new_papr_id'] == i]['new_author_id'].values
         authors = list(map(id_map.get, authors))
         v = pv[pv['new_papr_id'] == i]['new_venue_id'].values
-        v = list(map(id_map.get, v))
+        # v = list(map(id_map.get, v))
         if len(v) == 0:
-            v_emb = np.zeros(emb_dim)
+            # v_emb = np.zeros(emb_dim)
+            continue
         else:
             v_emb = all_emb[np.where(np.in1d(all_node, v))]
             if len(v_emb) == 0:
-                v_emb = np.zeros(emb_dim)
+                # v_emb = np.zeros(emb_dim)
+                continue
         if len(authors) == 0:
             a_emb = np.zeros(emb_dim)
         else:
@@ -175,13 +177,13 @@ def show_train_history(train_history, train, validation):
     plt.show()
 
 
-def pred_paper_emb(x_all, load=True):
+def pred_paper_emb(x_all):
     model = load_model('model/hdf5/' + GNN + '.h5')
     predictions = model.predict(x_all, workers=4)
     return predictions
 
 
-def gen_test_data(test_nodes):
+def gen_test_data(test_nodes, rec=True):
     x, y = [], []
     for i in tqdm(test_nodes):
         ans = pp[pp['new_papr_id'] == i]['new_cited_papr_id'].values
@@ -193,7 +195,8 @@ def gen_test_data(test_nodes):
             emb_venue = all_emb[np.where(np.in1d(all_node, venue))]
             if len(author) > 0:
                 if len(emb_venue) == 0:
-                    emb_venue = np.zeros(emb_dim)
+                    # emb_venue = np.zeros(emb_dim)
+                    continue
                 emb_author = all_emb[np.where(np.in1d(all_node, author))]
                 concat = np.concatenate((emb_venue, emb_title, emb_abs), axis=None)
                 if len(emb_author) > 1:
@@ -205,18 +208,20 @@ def gen_test_data(test_nodes):
                 elif len(emb_author) == 1:
                     x.append(np.concatenate((emb_author, concat), axis=None).tolist())
                     y.append(ans.tolist())
+    if not rec:
+        return y
+    else:
+        # 先預測出 paper emb
+        p_emb = pred_paper_emb(np.array(x))
+        results = []
+        batch_size = 20
+        for j in tqdm(range(0, len(x), batch_size)):
+            if j+batch_size > len(x):
+                results.extend(gen_paper(p_emb[j:]).tolist())
+            else:
+                results.extend(gen_paper(p_emb[j:(j+batch_size)]).tolist())
 
-    # 先預測出 paper emb
-    p_emb = pred_paper_emb(np.array(x))
-    results = []
-    batch_size = 20
-    for j in tqdm(range(0, len(x), batch_size)):
-        if j+batch_size > len(x):
-            results.extend(gen_paper(p_emb[j:]).tolist())
-        else:
-            results.extend(gen_paper(p_emb[j:(j+batch_size)]).tolist())
-
-    return results, y
+        return results, y
 
 
 if train:
@@ -226,13 +231,20 @@ if train:
     # x, y = x[p], y[p]
     model, train_history = train_model(x, y, save=True)
     show_train_history(train_history, 'loss', 'val_loss')
-    # todo show train MAP
 else:
     # 找特定時間的 paper id
     pp = pd.read_pickle('preprocess/edge/paper_paper.pkl')
-    test_timesteps = [284, 302, 307, 310, 318, 321]
+    test_timesteps = [162, 284, 302, 307, 310, 318, 321]
     for ts in test_timesteps:
         timestep = pv.loc[pv.time_step == ts, 'new_papr_id']
         test_rec, label = gen_test_data(timestep.values)
+        print('RS')
         show_average_results(label, test_rec)
+
+        rand_rec = []  # 算 random MAP
+        for j in label:
+            rand_rec.append(np.random.choice(candidate_ids, 150))
+        rand_rec = np.array(rand_rec)
+        print('Random')
+        show_average_results(label, rand_rec)
         print('-'*30)
