@@ -7,7 +7,7 @@ from model.baseline.graphsage_dnn.Layers import custom_Dense, zeros
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-task = 1
+task = 0
 with open('F:/volume/0217graphsage/0106/all_edge_1y.pkl', 'rb') as file:
     all_edge = pickle.load(file)
 
@@ -43,7 +43,7 @@ def gen_paper(batch_i, pred=True):
     # exclude_i = np.delete(paper_emb, index_i, axis=0)  # exclude row i
     # paper_i_pair = np.array([paper_i_emb.tolist(), ] * (n_times-1))  # repeat rows
     paper_i_pair = np.tile(paper_i_emb, (len(candidate_ids))).reshape(-1, 100)  # repeat rows
-    candidates = np.tile(candidate_paper_emb, (len(batch_i))).reshape(-1, 100)  # repeat candidate_ids
+    candidates = np.tile(candidate_paper_emb, (len(batch_i), 1))  # repeat candidate_ids
     paper_i_pair = np.concatenate((paper_i_pair, candidates), axis=1)  # shape: N * len(candidate_ids) * 200
     batch_y = []
     for j in batch_i:
