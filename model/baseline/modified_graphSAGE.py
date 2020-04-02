@@ -5,6 +5,7 @@ from tqdm import tqdm
 import ml_metrics as metrics
 from model.baseline.graphsage_dnn.Layers import custom_Dense, zeros
 import os
+from sklearn.metrics import recall_score, precision_score
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 task = 0
@@ -19,14 +20,17 @@ with open('F:/volume/0217graphsage/0106/all_edge_1y.pkl', 'rb') as file:
 
 # filter out relation = 0 (reference)
 all_paper = all_edge.loc[all_edge.rel == 0]
-all_paper_id = list(set(all_paper['head'].tolist() + all_paper['tail'].tolist()))
-candidate_ids = list(set(all_paper['tail'].tolist()))
+all_paper_id = np.sort(np.array(list(set(all_paper['head'].tolist() + all_paper['tail'].tolist()))))
+candidate_ids = np.sort(np.array(list(set(all_paper['tail'].tolist()))))
 # 只有出現在head過的paper
-head_paper_ids = list(set(all_paper['head'].tolist()))
+head_paper_ids = sorted(list(set(all_paper['head'].tolist())))
 
 # load paper embedding
 paper_emb = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/embedding.npy')
 emb_node = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/emb_node.npy')
+sort_ = np.argsort(emb_node)
+emb_node = emb_node[sort_]
+paper_emb = paper_emb[sort_]
 # keep node and emb only in paper_id
 index = np.where(np.in1d(emb_node, all_paper_id))
 emb_node = emb_node[index]
@@ -132,6 +136,7 @@ def sage_nn(nodes, save=True, shuffle=False):
         index_i = np.where(emb_node == batch_i)[0]
         paper_i_emb = paper_emb[index_i]  # paper i embedding
         cite_paper = all_paper[all_paper['head'] == batch_i]['tail'].values
+        # cite_paper = np.sort(cite_paper)
         i_cited_index = np.where(np.in1d(emb_node, cite_paper))
         paper_i_cite_emb = paper_emb[i_cited_index]  # paper i 有cite的embedding
         num_cited = paper_i_cite_emb.shape[0]  # paper i cite 幾篇
@@ -190,12 +195,14 @@ if task == 1:
     print('Loss: ' + str(np.sum(loss.reshape(-1))/ len(loss)))
     prediction = sess.run(tf.nn.sigmoid(prediction_logit))
     prediction = np.round(prediction.reshape(-1))  # flatten & to 0/ 1
-    print(np.sum(np.equal(prediction, y)) / len(y))
+    print('Overall Acc: ' + str(np.sum(np.equal(prediction, y)) / len(y)))
     # 算positive的acc
     pos_ = x[np.where(np.in1d(y, 1))]
     pos_label = y[np.where(np.in1d(y, 1))]
     pos_pred = sess.run(tf.nn.sigmoid(node_pred(pos_.astype('float32'))))
     pos_pred = np.round(pos_pred.reshape(-1))
     print('Positive Acc: ' + str(np.sum(np.equal(pos_pred, pos_label)) / len(pos_label)))
+    print('Recall: ' + str(recall_score(y, prediction)))
+    print('Precision: ' + str(precision_score(y, prediction)))
     sess.close()
 
