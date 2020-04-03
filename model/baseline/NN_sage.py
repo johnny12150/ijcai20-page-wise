@@ -11,6 +11,7 @@ import tensorflow as tf
 from model.baseline.graphsage_dnn.Layers import custom_Dense, zeros
 from model.baseline.eval_metrics import show_average_results
 import os
+import ml_metrics as metrics
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 train = False
@@ -31,6 +32,9 @@ abstracts = preprocessing.scale(np.array(abstracts.tolist()))
 # graphsage_dnn
 all_emb = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/embedding.npy')
 all_node = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/emb_node.npy')
+sort_ = np.argsort(all_node)
+all_node = all_node[sort_]
+all_emb = all_emb[sort_]
 # convert two 1d array to dict
 sage_emb_dnn = {}
 for id, emb in zip(all_node, all_emb):
@@ -45,10 +49,10 @@ with open('F:/volume/0217graphsage/0106/id_map.pkl', 'rb') as file:
 # all_edge['tail'] = all_edge['tail'].map(id_map)
 
 all_paper = all_edge.loc[all_edge.rel == 0]
-all_paper_id = list(set(all_paper['head'].tolist() + all_paper['tail'].tolist()))
-candidate_ids = list(set(all_paper['tail'].tolist()))
+all_paper_id = np.sort(np.array(list(set(all_paper['head'].tolist() + all_paper['tail'].tolist()))))
+candidate_ids = np.sort(np.array(list(set(all_paper['tail'].tolist()))))
 # 只有出現在head過的paper
-head_paper_ids = list(set(all_paper['head'].tolist()))
+head_paper_ids = sorted(list(set(all_paper['head'].tolist())))
 index = np.where(np.in1d(all_node, all_paper_id))
 emb_node = all_node[index]
 paper_emb = all_emb[index]
@@ -59,7 +63,7 @@ candidate_paper_emb = paper_emb[c_index]
 
 def gen_paper(paper_i_emb):
     paper_i_pair = np.tile(paper_i_emb, (len(candidate_ids))).reshape(-1, 100)  # repeat rows
-    candidates = np.tile(candidate_paper_emb, (len(paper_i_emb))).reshape(-1, 100)  # repeat candidate_ids
+    candidates = np.tile(candidate_paper_emb, (len(paper_i_emb), 1))  # repeat candidate_ids
     paper_i_pair = np.concatenate((paper_i_pair, candidates), axis=1)  # shape: N * len(candidate_ids) * 200
     return graphsage_nn(paper_i_pair, len(paper_i_emb))
 
@@ -98,7 +102,7 @@ def graph_bert_pair(save=True):
         emb_a = abstracts[i]
         # authors = all_edge[(all_edge['head']==i) & (all_edge.rel==1)]['tail'].values  # author
         authors = pa_extra[pa_extra['new_papr_id'] == i]['new_author_id'].values
-        authors = list(map(id_map.get, authors))
+        # authors = list(map(id_map.get, authors))
         v = pv[pv['new_papr_id'] == i]['new_venue_id'].values
         # v = list(map(id_map.get, v))
         if len(v) == 0:
@@ -143,19 +147,19 @@ def train_model(x, y, batch=1024, save=False):
     # 用一個network去逼近embedding
     all_in_one = Input(shape=(emb_dim*2+bert_title+bert_abstract,))
     BN = BatchNormalization()(all_in_one)
-    d1 = Dense(1000, activation='tanh')(BN)
+    d1 = Dense(2000, activation='tanh')(BN)
     # d1 = BatchNormalization()(d1)
-    d2 = Dense(512, activation='tanh')(d1)
+    d2 = Dense(1000, activation='tanh')(d1)
     # d2 = BatchNormalization()(d2)
-    d3 = Dense(256, activation='tanh')(d2)
-    d4 = Dense(200, activation='tanh')(d3)
-    d5 = Dense(128, activation='tanh')(d4)
+    d3 = Dense(800, activation='tanh')(d2)
+    d4 = Dense(500, activation='tanh')(d3)
+    d5 = Dense(200, activation='tanh')(d4)
     out_emb = Dense(emb_dim, activation='linear')(d5)
     model = Model(input=all_in_one, output=out_emb)
     print(model.summary())
 
-    # model.compile(optimizer='adam', loss='mae')
-    model.compile(optimizer='adam', loss='cosine_proximity')
+    model.compile(optimizer='adam', loss='mae')
+    # model.compile(optimizer='adam', loss='cosine_proximity')
     # plot_model(model, to_file='pics/model_LINE.png', show_shapes=True)
     early_stopping = EarlyStopping(monitor='val_loss', patience=5, verbose=2)
     train_history = model.fit(x, y, batch_size=batch, epochs=30, verbose=2, validation_split=0.33, callbacks=[early_stopping])
@@ -178,7 +182,7 @@ def show_train_history(train_history, train, validation):
 
 
 def pred_paper_emb(x_all):
-    model = load_model('model/hdf5/' + GNN + '.h5')
+    model = load_model('model/hdf5/model_gSAGE_NN.h5')
     predictions = model.predict(x_all, workers=4)
     return predictions
 
@@ -200,13 +204,13 @@ def gen_test_data(test_nodes, rec=True):
                 emb_author = all_emb[np.where(np.in1d(all_node, author))]
                 concat = np.concatenate((emb_venue, emb_title, emb_abs), axis=None)
                 if len(emb_author) > 1:
-                    repeat = np.tile(concat, len(emb_author))
-                    emb_concat = np.concatenate((emb_author, repeat), axis=None)
-                    x.extend(emb_concat.reshape(len(emb_author), -1).tolist())
+                    repeat = np.tile(concat, (len(emb_author), 1))
+                    emb_concat = np.concatenate((emb_author, repeat), axis=1)
+                    x.extend(emb_concat.tolist())
                     repeat_y = np.tile(ans, (len(emb_author), 1))
                     y.extend(repeat_y.tolist())
                 elif len(emb_author) == 1:
-                    x.append(np.concatenate((emb_author, concat), axis=None).tolist())
+                    x.append(np.concatenate((emb_author.reshape(-1), concat), axis=0).tolist())
                     y.append(ans.tolist())
     if not rec:
         return y
@@ -217,10 +221,13 @@ def gen_test_data(test_nodes, rec=True):
         batch_size = 20
         for j in tqdm(range(0, len(x), batch_size)):
             if j+batch_size > len(x):
-                results.extend(gen_paper(p_emb[j:]).tolist())
+                recommend = gen_paper(p_emb[j:]).tolist()
+                ans = y[j:]
+                results.extend(recommend)
             else:
-                results.extend(gen_paper(p_emb[j:(j+batch_size)]).tolist())
-
+                recommend = gen_paper(p_emb[j:(j+batch_size)]).tolist()
+                ans = y[j:(j+batch_size)]
+                results.extend(recommend)
         return results, y
 
 
@@ -231,6 +238,7 @@ if train:
     # x, y = x[p], y[p]
     model, train_history = train_model(x, y, save=True)
     show_train_history(train_history, 'loss', 'val_loss')
+    # todo 看部分train的MAP
 else:
     # 找特定時間的 paper id
     pp = pd.read_pickle('preprocess/edge/paper_paper.pkl')
@@ -241,10 +249,10 @@ else:
         print('RS')
         show_average_results(label, test_rec)
 
-        rand_rec = []  # 算 random MAP
-        for j in label:
-            rand_rec.append(np.random.choice(candidate_ids, 150))
-        rand_rec = np.array(rand_rec)
-        print('Random')
-        show_average_results(label, rand_rec)
+        # rand_rec = []  # 算 random MAP
+        # for j in label:
+        #     rand_rec.append(np.random.choice(candidate_ids, 150))
+        # rand_rec = np.array(rand_rec)
+        # print('Random')
+        # show_average_results(label, rand_rec)
         print('-'*30)

@@ -213,7 +213,7 @@ def data_generator(emb, pIds, pool, method, save=True, load=False):
 paper_pool = train2017[train2017.new_papr_id.isin(recPool)]
 
 # load previous results
-x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2017, paper_pool, GNN)
+x_train, paper_emb_train, y_all, paper_emb_all = data_generator(sage_emb, train2017, paper_pool, GNN, load=True)
 
 
 def train_model(x, y, batch=1024, save=False):
