@@ -5,7 +5,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from sklearn import preprocessing
 from keras.models import Model, load_model
-from keras.layers import Input, Dense, BatchNormalization
+from keras.layers import Input, Dense, BatchNormalization, Embedding, concatenate, Reshape
 from keras.callbacks import EarlyStopping
 import tensorflow as tf
 from model.baseline.graphsage_dnn.Layers import custom_Dense, zeros
@@ -56,6 +56,8 @@ head_paper_ids = sorted(list(set(all_paper['head'].tolist())))
 index = np.where(np.in1d(all_node, all_paper_id))
 emb_node = all_node[index]
 paper_emb = all_emb[index]
+# 增加 normalize過的 p, v, a embedding (沒用)
+paper_emb = preprocessing.scale(paper_emb)
 # find candidate papers' embedding
 c_index = np.where(np.in1d(emb_node, candidate_ids))
 candidate_paper_emb = paper_emb[c_index]
@@ -147,22 +149,40 @@ def train_model(x, y, batch=1024, save=False):
     # 用一個network去逼近embedding
     all_in_one = Input(shape=(emb_dim*2+bert_title+bert_abstract,))
     BN = BatchNormalization()(all_in_one)
-    d1 = Dense(2000, activation='tanh')(BN)
-    # d1 = BatchNormalization()(d1)
+    # 分開 input後過 embedding
+    abs = Input(shape=(bert_abstract,))
+    til = Input(shape=(bert_title,))
+    au = Input(shape=(emb_dim,))
+    ve = Input(shape=(emb_dim,))
+    emb1 = Dense(bert_abstract)(abs)
+    emb2 = Dense(bert_title)(til)
+    emb3 = Dense(emb_dim)(au)
+    emb4 = Dense(emb_dim)(ve)
+    con = concatenate([emb1, emb2, emb3, emb4])
+    d1 = Dense(2000, activation='tanh')(con)
     d2 = Dense(1000, activation='tanh')(d1)
-    # d2 = BatchNormalization()(d2)
-    d3 = Dense(800, activation='tanh')(d2)
-    d4 = Dense(500, activation='tanh')(d3)
-    d5 = Dense(200, activation='tanh')(d4)
-    out_emb = Dense(emb_dim, activation='linear')(d5)
-    model = Model(input=all_in_one, output=out_emb)
+    d3 = Dense(5000, activation='tanh')(d2)
+    out_emb = Dense(emb_dim, activation='linear')(d3)
+    model = Model([au, ve, til, abs], out_emb)
+
+    # d1 = Dense(2000, activation='tanh')(BN)
+    # # d1 = BatchNormalization()(d1)
+    # d2 = Dense(1000, activation='tanh')(d1)
+    # # d2 = BatchNormalization()(d2)
+    # d3 = Dense(800, activation='tanh')(d2)
+    # d4 = Dense(500, activation='tanh')(d3)
+    # d5 = Dense(200, activation='tanh')(d4)
+    # out_emb = Dense(emb_dim, activation='linear')(d5)
+    # model = Model(input=all_in_one, output=out_emb)
+
     print(model.summary())
 
     model.compile(optimizer='adam', loss='mae')
     # model.compile(optimizer='adam', loss='cosine_proximity')
     # plot_model(model, to_file='pics/model_LINE.png', show_shapes=True)
     early_stopping = EarlyStopping(monitor='val_loss', patience=5, verbose=2)
-    train_history = model.fit(x, y, batch_size=batch, epochs=30, verbose=2, validation_split=0.33, callbacks=[early_stopping])
+    # train_history = model.fit(x, y, batch_size=batch, epochs=30, verbose=2, validation_split=0.33, callbacks=[early_stopping])
+    train_history = model.fit([x[:, :100], x[:, 100:200], x[:, 200:968], x[:, 968:]], y, batch_size=batch, epochs=30, verbose=2, validation_split=0.33, callbacks=[early_stopping])
 
     if save:
         model.save('model/hdf5/model_gSAGE_NN.h5')
@@ -183,40 +203,51 @@ def show_train_history(train_history, train, validation):
 
 def pred_paper_emb(x_all):
     model = load_model('model/hdf5/model_gSAGE_NN.h5')
-    predictions = model.predict(x_all, workers=4)
+    predictions = model.predict([x_all[:, :100], x_all[:, 100:200], x_all[:, 200:968], x_all[:, 968:]], workers=4)
     return predictions
 
 
-def gen_test_data(test_nodes, rec=True):
+def gen_test_data(test_nodes, rec=True, rolling=False):
     x, y = [], []
     for i in tqdm(test_nodes):
         ans = pp[pp['new_papr_id'] == i]['new_cited_papr_id'].values
-        if len(ans) > 0:
-            emb_title = titles[i]
-            emb_abs = abstracts[i]
-            author = pa_extra[pa_extra['new_papr_id'] == i]['new_author_id'].values
-            venue = pv[pv['new_papr_id'] == i]['new_venue_id'].values
-            emb_venue = all_emb[np.where(np.in1d(all_node, venue))]
-            if len(author) > 0:
-                if len(emb_venue) == 0:
-                    # emb_venue = np.zeros(emb_dim)
-                    continue
-                emb_author = all_emb[np.where(np.in1d(all_node, author))]
-                concat = np.concatenate((emb_venue, emb_title, emb_abs), axis=None)
-                if len(emb_author) > 1:
-                    repeat = np.tile(concat, (len(emb_author), 1))
-                    emb_concat = np.concatenate((emb_author, repeat), axis=1)
-                    x.extend(emb_concat.tolist())
-                    repeat_y = np.tile(ans, (len(emb_author), 1))
-                    y.extend(repeat_y.tolist())
-                elif len(emb_author) == 1:
-                    x.append(np.concatenate((emb_author.reshape(-1), concat), axis=0).tolist())
-                    y.append(ans.tolist())
+        if not rolling:
+            if len(ans) > 0:
+                emb_title = titles[i]
+                emb_abs = abstracts[i]
+                author = pa_extra[pa_extra['new_papr_id'] == i]['new_author_id'].values
+                venue = pv[pv['new_papr_id'] == i]['new_venue_id'].values
+                emb_venue = all_emb[np.where(np.in1d(all_node, venue))]
+                if len(author) > 0:
+                    if len(emb_venue) == 0:
+                        # emb_venue = np.zeros(emb_dim)
+                        continue
+                    emb_author = all_emb[np.where(np.in1d(all_node, author))]
+                    concat = np.concatenate((emb_venue, emb_title, emb_abs), axis=None)
+                    if len(emb_author) > 1:
+                        repeat = np.tile(concat, (len(emb_author), 1))
+                        emb_concat = np.concatenate((emb_author, repeat), axis=1)
+                        x.extend(emb_concat.tolist())
+                        repeat_y = np.tile(ans, (len(emb_author), 1))
+                        y.extend(repeat_y.tolist())
+                    elif len(emb_author) == 1:
+                        x.append(np.concatenate((emb_author.reshape(-1), concat), axis=0).tolist())
+                        y.append(ans.tolist())
+        else:
+            if len(ans) > 0:
+                x.append(sage_emb_dnn[i])
+                y.append(ans.tolist())
+
     if not rec:
         return y
     else:
-        # 先預測出 paper emb
-        p_emb = pred_paper_emb(np.array(x))
+        if not rolling:
+            # 先預測出 paper emb
+            p_emb = pred_paper_emb(np.array(x))
+        else:
+            # 直接load graphsage出的embedding (只考慮pa, pv的)
+            p_emb = np.array(x)
+
         results = []
         batch_size = 20
         for j in tqdm(range(0, len(x), batch_size)):
@@ -245,7 +276,7 @@ else:
     test_timesteps = [162, 284, 302, 307, 310, 318, 321]
     for ts in test_timesteps:
         timestep = pv.loc[pv.time_step == ts, 'new_papr_id']
-        test_rec, label = gen_test_data(timestep.values)
+        test_rec, label = gen_test_data(timestep.values, rolling=True)
         print('RS')
         show_average_results(label, test_rec)
 
