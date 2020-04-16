@@ -235,8 +235,11 @@ def gen_test_data(test_nodes, rec=True, rolling=False):
                         y.append(ans.tolist())
         else:
             if len(ans) > 0:
-                x.append(sage_emb_dnn[i])
-                y.append(ans.tolist())
+                try:
+                    x.append(sage_emb_dnn[i])
+                    y.append(ans.tolist())
+                except:
+                    continue
 
     if not rec:
         return y
@@ -269,16 +272,17 @@ if train:
     # x, y = x[p], y[p]
     model, train_history = train_model(x, y, save=True)
     show_train_history(train_history, 'loss', 'val_loss')
-    # todo 看部分train的MAP
+
 else:
     # 找特定時間的 paper id
     pp = pd.read_pickle('preprocess/edge/paper_paper.pkl')
-    test_timesteps = [162, 284, 302, 307, 310, 318, 321]
+    test_timesteps = [162, 281, 284, 302, 307, 310, 318, 321]
     for ts in test_timesteps:
         timestep = pv.loc[pv.time_step == ts, 'new_papr_id']
         test_rec, label = gen_test_data(timestep.values, rolling=True)
-        print('RS')
-        show_average_results(label, test_rec)
+        if len(label) > 0 and len(test_rec) > 0:
+            print('RS')
+            show_average_results(label, test_rec)
 
         # rand_rec = []  # 算 random MAP
         # for j in label:
