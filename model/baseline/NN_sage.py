@@ -56,8 +56,6 @@ head_paper_ids = sorted(list(set(all_paper['head'].tolist())))
 index = np.where(np.in1d(all_node, all_paper_id))
 emb_node = all_node[index]
 paper_emb = all_emb[index]
-# 增加 normalize過的 p, v, a embedding (沒用)
-paper_emb = preprocessing.scale(paper_emb)
 # find candidate papers' embedding
 c_index = np.where(np.in1d(emb_node, candidate_ids))
 candidate_paper_emb = paper_emb[c_index]
@@ -253,7 +251,7 @@ def gen_test_data(test_nodes, rec=True, rolling=False):
 
         results = []
         batch_size = 20
-        for j in tqdm(range(0, len(x), batch_size)):
+        for j in range(0, len(x), batch_size):
             if j+batch_size > len(x):
                 recommend = gen_paper(p_emb[j:]).tolist()
                 ans = y[j:]
