@@ -29,47 +29,16 @@ abstracts = pd.read_pickle('preprocess/edge/abstracts_bert.pkl')
 titles = preprocessing.scale(np.array(titles.tolist()))
 abstracts = preprocessing.scale(np.array(abstracts.tolist()))
 
-# graphsage_dnn
-all_emb = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/embedding.npy')
-all_node = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/emb_node.npy')
-sort_ = np.argsort(all_node)
-all_node = all_node[sort_]
-all_emb = all_emb[sort_]
-# convert two 1d array to dict
-sage_emb_dnn = {}
-for id, emb in zip(all_node, all_emb):
-    sage_emb_dnn[id] = emb
 
-with open('F:/volume/0217graphsage/0106/all_edge_1y.pkl', 'rb') as file:
-    all_edge = pickle.load(file)
-# 把df原始 id map到 graphsage node的 id
-with open('F:/volume/0217graphsage/0106/id_map.pkl', 'rb') as file:
-    id_map = pickle.load(file)
-# all_edge['head'] = all_edge['head'].map(id_map)
-# all_edge['tail'] = all_edge['tail'].map(id_map)
-
-all_paper = all_edge.loc[all_edge.rel == 0]
-all_paper_id = np.sort(np.array(list(set(all_paper['head'].tolist() + all_paper['tail'].tolist()))))
-candidate_ids = np.sort(np.array(list(set(all_paper['tail'].tolist()))))
-# 只有出現在head過的paper
-head_paper_ids = sorted(list(set(all_paper['head'].tolist())))
-index = np.where(np.in1d(all_node, all_paper_id))
-emb_node = all_node[index]
-paper_emb = all_emb[index]
-# find candidate papers' embedding
-c_index = np.where(np.in1d(emb_node, candidate_ids))
-candidate_paper_emb = paper_emb[c_index]
-
-
-def gen_paper(paper_i_emb):
-    paper_i_pair = np.tile(paper_i_emb, (len(candidate_ids))).reshape(-1, 100)  # repeat rows
+def gen_paper(paper_i_emb, t):
+    paper_i_pair = np.tile(paper_i_emb, (len(candidate_paper_emb))).reshape(-1, 100)  # repeat rows
     candidates = np.tile(candidate_paper_emb, (len(paper_i_emb), 1))  # repeat candidate_ids
     paper_i_pair = np.concatenate((paper_i_pair, candidates), axis=1)  # shape: N * len(candidate_ids) * 200
-    return graphsage_nn(paper_i_pair, len(paper_i_emb))
+    return graphsage_nn(paper_i_pair, len(paper_i_emb), t=t)
 
 
 # 用 graphsage train的 nn來推薦
-def graphsage_nn(x, size=20, K=150):
+def graphsage_nn(x, size=20, K=150, t=281):
     h1_dim, h2_dim = 300, 100
     with tf.Graph().as_default():
         w0 = tf.get_variable('dense_1_vars/weights', shape=(200, h1_dim))  # define variables that we want
@@ -80,7 +49,8 @@ def graphsage_nn(x, size=20, K=150):
         b2 = zeros(1, 'dense_1_vars/bias_2')
         saver = tf.train.Saver()
         with tf.Session() as sess:
-            saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
+            saver.restore(sess, 'F:/volume/0217graphsage/0106/rolling_models/'+str(t)+'/model')
+            # saver.restore(sess, 'F:/volume/0217graphsage/0106/model_output/model')
             node_pred = custom_Dense(w0, w1, w2, b0, b1, b2)
             pred = sess.run(tf.nn.sigmoid(node_pred(x.astype('float32')))).reshape(size, -1)
 
@@ -205,9 +175,9 @@ def pred_paper_emb(x_all):
     return predictions
 
 
-def gen_test_data(test_nodes, rec=True, rolling=False):
+def gen_test_data(test_nodes, t, rec=True, rolling=False):
     x, y = [], []
-    for i in tqdm(test_nodes):
+    for i in test_nodes:
         ans = pp[pp['new_papr_id'] == i]['new_cited_papr_id'].values
         if not rolling:
             if len(ans) > 0:
@@ -238,7 +208,7 @@ def gen_test_data(test_nodes, rec=True, rolling=False):
                     y.append(ans.tolist())
                 except:
                     continue
-
+    print('測試篇數為'+str(len(y)))
     if not rec:
         return y
     else:
@@ -251,13 +221,13 @@ def gen_test_data(test_nodes, rec=True, rolling=False):
 
         results = []
         batch_size = 20
-        for j in range(0, len(x), batch_size):
+        for j in tqdm(range(0, len(x), batch_size)):
             if j+batch_size > len(x):
-                recommend = gen_paper(p_emb[j:]).tolist()
+                recommend = gen_paper(p_emb[j:], t).tolist()
                 ans = y[j:]
                 results.extend(recommend)
             else:
-                recommend = gen_paper(p_emb[j:(j+batch_size)]).tolist()
+                recommend = gen_paper(p_emb[j:(j+batch_size)], t).tolist()
                 ans = y[j:(j+batch_size)]
                 results.extend(recommend)
         return results, y
@@ -274,18 +244,37 @@ if train:
 else:
     # 找特定時間的 paper id
     pp = pd.read_pickle('preprocess/edge/paper_paper.pkl')
-    test_timesteps = [162, 281, 284, 302, 307, 310, 318, 321]
+    test_timesteps = [281, 284, 302, 307, 310, 318, 321]
     for ts in test_timesteps:
-        timestep = pv.loc[pv.time_step == ts, 'new_papr_id']
-        test_rec, label = gen_test_data(timestep.values, rolling=True)
-        if len(label) > 0 and len(test_rec) > 0:
-            print('RS')
-            show_average_results(label, test_rec)
+        # 根據時間 load embedding
+        all_emb = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/embedding'+str(ts)+'.npy')
+        all_node = np.load('F:/volume/0217graphsage/0106/author_venue_embedding/emb_node'+str(ts)+'.npy')
+        sort_ = np.argsort(all_node)
+        all_node = all_node[sort_]
+        all_emb = all_emb[sort_]
+        # convert two 1d array to dict
+        sage_emb_dnn = {}
+        for id, emb in zip(all_node, all_emb):
+            sage_emb_dnn[id] = emb
 
-        # rand_rec = []  # 算 random MAP
-        # for j in label:
-        #     rand_rec.append(np.random.choice(candidate_ids, 150))
-        # rand_rec = np.array(rand_rec)
-        # print('Random')
-        # show_average_results(label, rand_rec)
+        # todo 考慮改成直接從 pp裡面找
+        with open('F:/volume/0217graphsage/0106/all_edge_'+str(ts)+'.pkl', 'rb') as file:
+            all_edge = pickle.load(file)
+        all_paper = all_edge.loc[all_edge.rel == 0]
+        all_paper_id = np.sort(np.array(list(set(all_paper['head'].tolist() + all_paper['tail'].tolist()))))
+        candidate_ids = np.sort(np.array(list(set(all_paper['tail'].tolist()))))
+        # 只有出現在head過的paper
+        head_paper_ids = sorted(list(set(all_paper['head'].tolist())))
+        index = np.where(np.in1d(all_node, all_paper_id))
+        emb_node = all_node[index]
+        paper_emb = all_emb[index]
+        # find candidate papers' embedding
+        c_index = np.where(np.in1d(emb_node, candidate_ids))
+        candidate_paper_emb = paper_emb[c_index]
+
+        timestep = pv.loc[pv.time_step == ts, 'new_papr_id']
+        test_rec, label = gen_test_data(timestep.values, ts, rolling=True)
+        if len(label) > 0 and len(test_rec) > 0:
+            print('RS, t= ' + str(ts))
+            show_average_results(label, test_rec)
         print('-'*30)
